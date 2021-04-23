@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -9,9 +11,8 @@ MODULE_LICENSE("GPL");
 static int count;
 static u8 raw[MAX_WIDTH * 6];
 static void ffe_initialize(unsigned int width);
-static void ffe_generate(unsigned int width, unsigned int height, void *vbuf);
-
 EXPORT_SYMBOL(ffe_initialize);
+static void ffe_generate(unsigned int width, unsigned int height, void *vbuf);
 EXPORT_SYMBOL(ffe_generate);
 
 /* ------------------------------------ {    R,    G,    B} */
