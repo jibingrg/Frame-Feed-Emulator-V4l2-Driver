@@ -16,7 +16,7 @@ Working Platform:- Ubuntu 18.04.5 LTS (4.15.0-141-generic)
 		$ sudo insmod driver_v4l2.ko
 
 
-3. dmeseg will give the node name
+3. dmesg will give the node name
 
 		$ dmesg
 
@@ -36,3 +36,12 @@ Working Platform:- Ubuntu 18.04.5 LTS (4.15.0-141-generic)
 		$ mplayer tv:// -tv driver=v4l2:device=/dev/video1:width=1280:height=720:fps=30:outfmt=yuy2
 		
 		$ mplayer tv:// -tv driver=v4l2:device=/dev/video1:width=1280:height=720:fps=30:outfmt=mjpg
+
+
+5. Remove module
+		
+		$ sudo rmmod driver_v4l2
+
+		$ sudo rmmod frame_feed_emulator
+
+
