@@ -13,7 +13,7 @@
 #include <media/v4l2-device.h>
 #include <media/videobuf2-vmalloc.h>
 
-#define VERSION				"0.1.0"
+#include "driver_v4l2.h"
 
 #define MAX_WIDTH			1920
 #define MAX_HEIGHT			1080
@@ -21,10 +21,7 @@
 
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(VERSION);
 
-extern void ffe_initialize(unsigned int width);
-extern void ffe_generate(unsigned int width, unsigned int height, void *vbuf);
 
 static void p_release(struct device *dev)
 {
@@ -103,8 +100,8 @@ static void ffe_sleep(struct dev_data *dev)
 	vbuf = vb2_plane_vaddr(&buf->vb, 0);
 	list_del(&buf->list);
 	spin_unlock_irqrestore(&dev->s_lock, flags);
-	ffe_generate(dev->width, dev->height, vbuf);
-	buf->v4l2_buf.field = V4L2_FIELD_ANY;
+	ffe_generate(dev->width, dev->height, dev->pixelsize, vbuf);
+	buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
 	buf->v4l2_buf.sequence = dev->f_count++;
 	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
 ret:
@@ -165,7 +162,7 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	}
 
 	vb2_set_plane_payload(&buf->vb, 0, size);
-	ffe_initialize(dev->width);
+	ffe_initialize(dev->width, dev->pixelsize);
 	return 0;
 }
 
@@ -264,11 +261,19 @@ static int vidioc_querycap(struct file *file, void  *priv, struct v4l2_capabilit
 
 static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv, struct v4l2_fmtdesc *f)
 {
-	if (f->index >= 1)
+	if (f->index >= 2)
 		return -EINVAL;
 
-	strlcpy(f->description, "RGB24", sizeof(f->description));
-	f->pixelformat = V4L2_PIX_FMT_RGB24;
+	switch (f->index) {
+	case 0:
+		strlcpy(f->description, "YUV 4:2:2", sizeof(f->description));
+		f->pixelformat = V4L2_PIX_FMT_YUYV;
+		break;
+	case 1:
+		strlcpy(f->description, "RGB3", sizeof(f->description));
+		f->pixelformat = V4L2_PIX_FMT_RGB24;
+		break;
+	}
 	return 0;
 }
 
@@ -278,11 +283,19 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 
 	f->fmt.pix.width = dev->width;
 	f->fmt.pix.height = dev->height;
-	f->fmt.pix.field = V4L2_FIELD_ANY;
-	f->fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
-	f->fmt.pix.bytesperline = (f->fmt.pix.width * 24) >> 3;
+	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
+	f->fmt.pix.pixelformat = dev->pixelformat;
+	switch (f->fmt.pix.pixelformat) {
+	case V4L2_PIX_FMT_YUYV:
+		f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
+		break;
+	case V4L2_PIX_FMT_RGB24:
+		f->fmt.pix.bytesperline = f->fmt.pix.width * 3;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
+		break;
+	}
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
-	f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
 	return 0;
 }
 
@@ -290,15 +303,27 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 {
 	struct dev_data *dev = video_drvdata(file);
 
-	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_RGB24) {
+	switch (f->fmt.pix.pixelformat) {
+	case V4L2_PIX_FMT_YUYV:
+		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
+		break;
+	case V4L2_PIX_FMT_RGB24:
+		dev->pixelformat = V4L2_PIX_FMT_RGB24;
+		f->fmt.pix.bytesperline = f->fmt.pix.width * 3;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
+		break;
+	default:
 		v4l2_err(&dev->v4l2_dev, "%s: Unknown format..\n", __func__);
-		f->fmt.pix.pixelformat = V4L2_PIX_FMT_RGB24;
+		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		f->fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+		f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
+		break;
 	}
-
-	f->fmt.pix.field = V4L2_FIELD_ANY;
-	f->fmt.pix.bytesperline = (f->fmt.pix.width * 24) >> 3;
+	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
-	f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
 	return 0;
 }
 
@@ -317,8 +342,18 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 		return -EBUSY;
 	}
 
-	dev->pixelformat = V4L2_PIX_FMT_RGB24;
-	dev->pixelsize = 3;
+	switch (f->fmt.pix.pixelformat) {
+	case V4L2_PIX_FMT_YUYV:
+		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		dev->pixelsize = 2;
+	case V4L2_PIX_FMT_RGB24:
+		dev->pixelformat = V4L2_PIX_FMT_RGB24;
+		dev->pixelsize = 3;
+	default:
+		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		dev->pixelsize = 2;
+	}
+
 	dev->width = f->fmt.pix.width;
 	dev->height = f->fmt.pix.height;
 	return 0;
@@ -332,7 +367,7 @@ static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsi
 
 	if (fsize->index)
 		return -EINVAL;
-	if (fsize->pixel_format != V4L2_PIX_FMT_RGB24)
+	if ((fsize->pixel_format != V4L2_PIX_FMT_YUYV) || (fsize->pixel_format != V4L2_PIX_FMT_RGB24))
 		return -EINVAL;
 	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
 	fsize->stepwise = sizes;
@@ -341,7 +376,7 @@ static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsi
 
 static int vidioc_enum_input(struct file *file, void *priv, struct v4l2_input *inp)
 {
-	if (inp->index >= 1)
+	if (inp->index >= 2)
 		return -EINVAL;
 
 	inp->type = V4L2_INPUT_TYPE_CAMERA;
@@ -368,7 +403,7 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 		return 0;
 
 	dev->input = i;
-	ffe_initialize(dev->width);
+	ffe_initialize(dev->width, dev->pixelsize);
 	return 0;
 }
 
@@ -377,7 +412,7 @@ static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2
 	if (fival->index)
 		return -EINVAL;
 
-	if (fival->pixel_format != V4L2_PIX_FMT_RGB24)
+	if ((fival->pixel_format != V4L2_PIX_FMT_YUYV) || (fival->pixel_format != V4L2_PIX_FMT_RGB24))
 		return -EINVAL;
 
 	if (fival->width < 48 || fival->width > MAX_WIDTH || (fival->width & 3))
@@ -481,11 +516,11 @@ static int p_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	dev->pixelformat = V4L2_PIX_FMT_RGB24;
+	dev->pixelformat = V4L2_PIX_FMT_YUYV;
 	dev->time_per_frame = tpf_default;
 	dev->width = 640;
 	dev->height = 360;
-	dev->pixelsize = 3;
+	dev->pixelsize = 2;
 
 	spin_lock_init(&dev->s_lock);
 
@@ -569,7 +604,6 @@ static int __init v4l2_init(void)
 		pr_err("%s: platform driver, %s registration failed..\n", __func__, p_driver.driver.name);
 		platform_device_unregister(&p_device);
 	}
-	pr_info("Frame Feed Emulator V4L2 Driver version %s loaded successfully..\n", VERSION);
 	return ret;
 }
 

@@ -10,9 +10,9 @@ MODULE_LICENSE("GPL");
 
 static int count;
 static u8 raw[MAX_WIDTH * 6];
-static void ffe_initialize(unsigned int width);
+static void ffe_initialize(unsigned int width, unsigned int pixelsize);
 EXPORT_SYMBOL(ffe_initialize);
-static void ffe_generate(unsigned int width, unsigned int height, void *vbuf);
+static void ffe_generate(unsigned int width, unsigned int height, unsigned int pixelsize, void *vbuf);
 EXPORT_SYMBOL(ffe_generate);
 
 /* ------------------------------------ {    R,    G,    B} */
@@ -27,51 +27,67 @@ EXPORT_SYMBOL(ffe_generate);
 #define COLOR_BLACK			{ 0x00, 0x00, 0x00}
 
 /* ----------standard color bar---------- */
-static const u8 bar[8][3] = {
+static const u8 rgb[8][3] = {
 	COLOR_WHITE, COLOR_YELLOW, COLOR_CYAN, COLOR_GREEN, COLOR_MAGENTA, COLOR_RED, COLOR_BLUE, COLOR_BLACK
 };
 
-static void ffe_initialize(unsigned int width)
+u8 yuv[8][3];
+
+static void ffe_initialize(unsigned int width, unsigned int pixelsize)
 {
-	int i;
+	int start, end;
+	int i, j;
+	bool flag;
 	u8 *p;
 
 	for (i = 0; i < 16; i++) {
-		int start = i * width / 8;
-		int end = (i+1) * width / 8;
-		int j;
-
-		p = &raw[start * 3];
+		start = i * width / 8;
+		end = (i+1) * width / 8;
+		p = &raw[start * pixelsize];
+		flag = true;
 
 		for (j = start; j < end; j++) {
-			memcpy(p, &bar[i % 8][0], 3);
-			p += 3;
+			if (pixelsize == 2) {
+				*p = yuv[i % 8][0];
+				*(p+1) = flag ? yuv[i % 8][1] : yuv[i % 8][2];
+				flag = !flag;
+			} else {
+				memcpy(p, &rgb[i % 8][0], pixelsize);
+			}
+			p += pixelsize;
 		}
 	}
 }
 
-static void ffe_generate(unsigned int width, unsigned int height, void *vbuf)
+static void ffe_generate(unsigned int width, unsigned int height, unsigned int pixelsize, void *vbuf)
 {
 	int size, i;
-	u8 *start;
+	u8 *p;
 
 	if (!vbuf) {
 		pr_err("%s: buffer error..\n", __func__);
 		return;
 	}
 
-	size = width * 3;
-	start = &raw[(count % width) * 3];
+	size = width * pixelsize;
+	p = &raw[(count % width) * pixelsize];
 
 	for (i = 0; i < height; i++)
-		memcpy(vbuf + i * size, start, size);
+		memcpy(vbuf + i * size, p, size);
 
-	count++;
+	count += 2;
 }
 
 static int __init ffe_init(void)
 {
+	int i;
+
 	pr_info("%s\n", __func__);
+	for (i = 0; i < 8; i++) {
+		yuv[i][0] = ((16829 * rgb[i][0] + 33039 * rgb[i][1] + 6416 * rgb[i][2] + 32768) >> 16) + 16;
+		yuv[i][1] = ((-9714 * rgb[i][0] - 19070 * rgb[i][1] + 28784 * rgb[i][2] + 32768) >> 16) + 128;
+		yuv[i][2] = ((28784 * rgb[i][0] - 24103 * rgb[i][1] - 4681 * rgb[i][2]  + 32768) >> 16) + 128;
+	}
 	return 0;
 }
 
