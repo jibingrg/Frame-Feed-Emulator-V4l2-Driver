@@ -58,6 +58,11 @@ struct dev_data {
 	struct platform_device		*pdev;
 	struct v4l2_device		v4l2_dev;
 	struct video_device		vdev;
+	struct v4l2_ctrl_handler	ctrl_handler;
+	struct v4l2_ctrl		*brightness;
+	struct v4l2_ctrl		*contrast;
+	struct v4l2_ctrl		*saturation;
+	struct v4l2_ctrl		*hue;
 	struct mutex			mutex;
 	struct vb2_queue		queue;
 	struct ffe_dmaq			vidq;
@@ -460,6 +465,33 @@ static int vidioc_s_parm(struct file *file, void *priv, struct v4l2_streamparm *
 	return 0;
 }
 
+static int s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct dev_data *dev = container_of(ctrl->handler, struct dev_data, ctrl_handler);
+
+	switch (ctrl->id) {
+	case V4L2_CID_BRIGHTNESS:
+		dev->brightness = ctrl;
+		break;
+	case V4L2_CID_CONTRAST:
+		dev->contrast = ctrl;
+		break;
+	case V4L2_CID_SATURATION:
+		dev->saturation = ctrl;
+		break;
+	case V4L2_CID_HUE:
+		dev->hue = ctrl;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static const struct v4l2_ctrl_ops ffe_ctrl_ops = {
+	.s_ctrl				= s_ctrl,
+};
+
 static const struct v4l2_ioctl_ops ffe_ioctl_ops = {
 	.vidioc_querycap		= vidioc_querycap,
 	.vidioc_enum_fmt_vid_cap	= vidioc_enum_fmt_vid_cap,
@@ -501,6 +533,7 @@ static int p_probe(struct platform_device *pdev)
 	struct dev_data *dev;
 	struct video_device *vdev;
 	struct vb2_queue *q;
+	struct v4l2_ctrl_handler *hdl;
 	int ret;
 
 	dev_info(&pdev->dev, "%s\n", __func__);
@@ -522,8 +555,27 @@ static int p_probe(struct platform_device *pdev)
 	dev->height = 360;
 	dev->pixelsize = 2;
 
-	spin_lock_init(&dev->s_lock);
+	hdl = &dev->ctrl_handler;
+	v4l2_ctrl_handler_init(hdl, 4);
+	dev->brightness = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
+			V4L2_CID_BRIGHTNESS, 0, 255, 1, 127);
+	dev->contrast = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
+			V4L2_CID_CONTRAST, 0, 255, 1, 16);
+	dev->saturation = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
+			V4L2_CID_SATURATION, 0, 255, 1, 127);
+	dev->hue = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
+			V4L2_CID_HUE, -128, 127, 1, 0);
 
+	if (hdl->error) {
+		dev_err(&pdev->dev, "%s: v4l2 control handler error..\n", __func__);
+		ret = hdl->error;
+		v4l2_ctrl_handler_free(hdl);
+		v4l2_device_unregister(&dev->v4l2_dev);
+		return ret;
+	}
+	dev->v4l2_dev.ctrl_handler = hdl;
+
+	spin_lock_init(&dev->s_lock);
 	q = &dev->queue;
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF | VB2_READ;
@@ -536,6 +588,7 @@ static int p_probe(struct platform_device *pdev)
 	ret = vb2_queue_init(q);
 	if (ret) {
 		dev_err(&pdev->dev, "%s: vb2 queue init failed..\n", __func__);
+		v4l2_ctrl_handler_free(hdl);
 		v4l2_device_unregister(&dev->v4l2_dev);
 		return ret;
 	}
@@ -557,6 +610,7 @@ static int p_probe(struct platform_device *pdev)
 	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "%s: video device registration failed..\n", __func__);
+		v4l2_ctrl_handler_free(hdl);
 		v4l2_device_unregister(&dev->v4l2_dev);
 		video_device_release(&dev->vdev);
 		return ret;
@@ -575,6 +629,7 @@ static int p_remove(struct platform_device *pdev)
 	v4l2_info(&dev->v4l2_dev, "%s: unregistering %s\n", __func__, video_device_node_name(&dev->vdev));
 	video_unregister_device(&dev->vdev);
 	v4l2_device_unregister(&dev->v4l2_dev);
+	v4l2_ctrl_handler_free(&dev->ctrl_handler);
 	return 0;
 }
 
