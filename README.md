@@ -39,7 +39,7 @@ Working Platform:- Ubuntu 18.04.5 LTS (4.15.0-141-generic)
 		
 	c) GStreamer Pipeline
 
-     		$ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,interlace-mode=interleaved,height=720,width=1280 ! videoconvert ! videoscale ! autovideosink
+     	$ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,interlace-mode=interleaved,height=720,width=1280 ! videoconvert ! videoscale ! autovideosink
 
 
 5. Remove module
