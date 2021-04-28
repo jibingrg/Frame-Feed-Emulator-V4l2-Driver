@@ -2,7 +2,9 @@
 
 V4L2 driver with Frame Feed Emulator
 
-Working Platform:- Ubuntu 18.04.5 LTS (4.15.0-141-generic)
+Tested Platform : Ubuntu 18.04.5 LTS (4.15.0-141-generic)
+
+Dependencies : v4l2-utils
 
 1. Build the project using make.
 
