@@ -1,9 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-/*
- * V4L2 driver with Frame Feed Emulator
- */
-
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/freezer.h>
@@ -15,8 +11,8 @@
 
 #include "driver_v4l2.h"
 
-#define MAX_WIDTH			1920
-#define MAX_HEIGHT			1080
+#define MAX_WIDTH			3840
+#define MAX_HEIGHT			2160
 #define MAX_FPS				1000
 
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
@@ -39,7 +35,7 @@ static struct platform_device p_device = {
 static const struct v4l2_fract
 	tpf_min = {.numerator = 1, .denominator = MAX_FPS},
 	tpf_max = {.numerator = MAX_FPS, .denominator = 1},
-	tpf_default = {.numerator = 1, .denominator = 30};			/* 30 frames per second */
+	tpf_default = {.numerator = 1, .denominator = 30};
 
 struct ffe_buffer {
 	struct vb2_buffer		vb;
@@ -72,58 +68,53 @@ struct dev_data {
 	int				input;
 	unsigned int			f_count;
 	unsigned int			width, height, pixelsize;
-	u8				line[MAX_WIDTH * 6];
 };
 
-static void ffe_sleep(struct dev_data *dev)
+static int ffe_thread(void *data)
 {
+	struct dev_data *dev = data;
 	struct ffe_dmaq *q = &dev->vidq;
 	struct ffe_buffer *buf;
 	unsigned long flags = 0;
 	int timeout;
 	void *vbuf;
-	DECLARE_WAITQUEUE(wait, current);
-
-	add_wait_queue(&q->wq, &wait);
-
-	if (kthread_should_stop()) {
-		remove_wait_queue(&q->wq, &wait);
-		try_to_freeze();
-		return;
-	}
-
-	timeout = msecs_to_jiffies((dev->time_per_frame.numerator * 1000) / dev->time_per_frame.denominator);
-	spin_lock_irqsave(&dev->s_lock, flags);
-
-	if (list_empty(&q->active)) {
-		v4l2_err(&dev->v4l2_dev, "%s: No active queue\n", __func__);
-		spin_unlock_irqrestore(&dev->s_lock, flags);
-		goto ret;
-	}
-
-	buf = list_entry(q->active.next, struct ffe_buffer, list);
-	vbuf = vb2_plane_vaddr(&buf->vb, 0);
-	list_del(&buf->list);
-	spin_unlock_irqrestore(&dev->s_lock, flags);
-	ffe_generate(dev->width, dev->height, dev->pixelsize, vbuf);
-	buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
-	buf->v4l2_buf.sequence = dev->f_count++;
-	vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
-ret:
-	schedule_timeout_interruptible(timeout);
-	remove_wait_queue(&q->wq, &wait);
-	try_to_freeze();
-}
-
-static int ffe_thread(void *data)
-{
-	struct dev_data *dev = data;
 
 	v4l2_info(&dev->v4l2_dev, "%s\n", __func__);
 	set_freezable();
 
 	while (1) {
-		ffe_sleep(dev);
+		DECLARE_WAITQUEUE(wait, current);
+
+		add_wait_queue(&q->wq, &wait);
+
+		if (kthread_should_stop()) {
+			remove_wait_queue(&q->wq, &wait);
+			try_to_freeze();
+			goto ret1;
+		}
+
+		timeout = msecs_to_jiffies((dev->time_per_frame.numerator * 1000) / dev->time_per_frame.denominator);
+		spin_lock_irqsave(&dev->s_lock, flags);
+
+		if (list_empty(&q->active)) {
+			v4l2_err(&dev->v4l2_dev, "%s: No active queue\n", __func__);
+			spin_unlock_irqrestore(&dev->s_lock, flags);
+			goto ret;
+		}
+
+		buf = list_entry(q->active.next, struct ffe_buffer, list);
+		vbuf = vb2_plane_vaddr(&buf->vb, 0);
+		list_del(&buf->list);
+		spin_unlock_irqrestore(&dev->s_lock, flags);
+		ffe_generate(dev->width, dev->height, dev->pixelsize, vbuf);
+		buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
+		buf->v4l2_buf.sequence = dev->f_count++;
+		vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
+ret:
+		schedule_timeout_interruptible(timeout);
+		remove_wait_queue(&q->wq, &wait);
+		try_to_freeze();
+ret1:
 		if (kthread_should_stop())
 			break;
 	}
@@ -142,7 +133,7 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned in
 	*nplanes = 1;
 	sizes[0] = size;
 
-	v4l2_info(&dev->v4l2_dev, "%s: count = %d, size = %ld\n", __func__, *nbuffers, size);
+	v4l2_info(&dev->v4l2_dev, "%s: width = %d, height = %d, size = %ld\n", __func__, dev->width, dev->height, size);
 	return 0;
 }
 
@@ -155,14 +146,14 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	dev = vb2_get_drv_priv(vb->vb2_queue);
 	buf = container_of(vb, struct ffe_buffer, vb);
 
-	if (dev->width < 48 || dev->width > MAX_WIDTH || dev->height < 32 || dev->height > MAX_HEIGHT) {
+	if (dev->width > MAX_WIDTH || dev->height > MAX_HEIGHT) {
 		v4l2_err(&dev->v4l2_dev, "%s: width or/and height is/are not in expected range..\n", __func__);
 		return -EINVAL;
 	}
 
 	size = dev->width * dev->height * dev->pixelsize;
 	if (vb2_plane_size(vb, 0) < size) {
-		v4l2_err(&dev->v4l2_dev, "%s: data will not fit into the plane (%lu < %lu)..\n", __func__, vb2_plane_size(vb, 0), size);
+		v4l2_err(&dev->v4l2_dev, "%s: vb2 plane size is less than required..\n", __func__);
 		return -EINVAL;
 	}
 
@@ -418,12 +409,6 @@ static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2
 		return -EINVAL;
 
 	if ((fival->pixel_format != V4L2_PIX_FMT_YUYV) || (fival->pixel_format != V4L2_PIX_FMT_RGB24))
-		return -EINVAL;
-
-	if (fival->width < 48 || fival->width > MAX_WIDTH || (fival->width & 3))
-		return -EINVAL;
-
-	if (fival->height < 32 || fival->height > MAX_HEIGHT)
 		return -EINVAL;
 
 	fival->type = V4L2_FRMIVAL_TYPE_CONTINUOUS;
