@@ -86,35 +86,26 @@ static int ffe_thread(void *data)
 		DECLARE_WAITQUEUE(wait, current);
 
 		add_wait_queue(&q->wq, &wait);
-
-		if (kthread_should_stop()) {
-			remove_wait_queue(&q->wq, &wait);
-			try_to_freeze();
-			goto ret1;
-		}
-
-		timeout = msecs_to_jiffies((dev->time_per_frame.numerator * 1000) / dev->time_per_frame.denominator);
 		spin_lock_irqsave(&dev->s_lock, flags);
 
 		if (list_empty(&q->active)) {
 			v4l2_err(&dev->v4l2_dev, "%s: No active queue\n", __func__);
+			spin_unlock_irqrestore(&dev->s_lock, flags);	
+		} else {
+			buf = list_entry(q->active.next, struct ffe_buffer, list);
+			vbuf = vb2_plane_vaddr(&buf->vb, 0);
+			list_del(&buf->list);
 			spin_unlock_irqrestore(&dev->s_lock, flags);
-			goto ret;
+			ffe_generate(dev->width, dev->height, dev->pixelsize, vbuf);
+			buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
+			buf->v4l2_buf.sequence = dev->f_count++;
+			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
 		}
 
-		buf = list_entry(q->active.next, struct ffe_buffer, list);
-		vbuf = vb2_plane_vaddr(&buf->vb, 0);
-		list_del(&buf->list);
-		spin_unlock_irqrestore(&dev->s_lock, flags);
-		ffe_generate(dev->width, dev->height, dev->pixelsize, vbuf);
-		buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
-		buf->v4l2_buf.sequence = dev->f_count++;
-		vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
-ret:
+		timeout = msecs_to_jiffies((dev->time_per_frame.numerator * 1000) / dev->time_per_frame.denominator);
 		schedule_timeout_interruptible(timeout);
 		remove_wait_queue(&q->wq, &wait);
 		try_to_freeze();
-ret1:
 		if (kthread_should_stop())
 			break;
 	}
@@ -124,11 +115,8 @@ ret1:
 
 static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned int *nplanes, unsigned int sizes[], struct device *alloc_ctxs[])
 {
-	struct dev_data *dev;
-	unsigned long size;
-
-	dev = vb2_get_drv_priv(vq);
-	size = dev->width * dev->height * dev->pixelsize;
+	struct dev_data *dev = vb2_get_drv_priv(vq);
+	unsigned long size = dev->width * dev->height * dev->pixelsize;
 
 	*nplanes = 1;
 	sizes[0] = size;
@@ -139,19 +127,15 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned in
 
 static int buffer_prepare(struct vb2_buffer *vb)
 {
-	struct dev_data *dev;
-	struct ffe_buffer *buf;
-	unsigned long size;
-
-	dev = vb2_get_drv_priv(vb->vb2_queue);
-	buf = container_of(vb, struct ffe_buffer, vb);
+	struct dev_data *dev = vb2_get_drv_priv(vb->vb2_queue);
+	struct ffe_buffer *buf = container_of(vb, struct ffe_buffer, vb);
+	unsigned long size = dev->width * dev->height * dev->pixelsize;
 
 	if (dev->width > MAX_WIDTH || dev->height > MAX_HEIGHT) {
-		v4l2_err(&dev->v4l2_dev, "%s: width or/and height is/are not in expected range..\n", __func__);
+		v4l2_err(&dev->v4l2_dev, "%s: width or height is larger than expected..\n", __func__);
 		return -EINVAL;
 	}
 
-	size = dev->width * dev->height * dev->pixelsize;
 	if (vb2_plane_size(vb, 0) < size) {
 		v4l2_err(&dev->v4l2_dev, "%s: vb2 plane size is less than required..\n", __func__);
 		return -EINVAL;
@@ -164,14 +148,10 @@ static int buffer_prepare(struct vb2_buffer *vb)
 
 static void buffer_queue(struct vb2_buffer *vb)
 {
-	struct dev_data *dev;
-	struct ffe_buffer *buf;
-	struct ffe_dmaq *vidq;
+	struct dev_data *dev = vb2_get_drv_priv(vb->vb2_queue);
+	struct ffe_buffer *buf = container_of(vb, struct ffe_buffer, vb);
+	struct ffe_dmaq *vidq = &dev->vidq;
 	unsigned long flags = 0;
-
-	dev = vb2_get_drv_priv(vb->vb2_queue);
-	buf = container_of(vb, struct ffe_buffer, vb);
-	vidq = &dev->vidq;
 
 	spin_lock_irqsave(&dev->s_lock, flags);
 	list_add_tail(&buf->list, &vidq->active);
@@ -188,15 +168,10 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	q->kthread = kthread_run(ffe_thread, dev, "%s", dev->v4l2_dev.name);
 
 	if (IS_ERR(q->kthread)) {
-		struct ffe_buffer *buf, *tmp;
-
 		v4l2_err(&dev->v4l2_dev, "%s: kernel_thread() failed..\n", __func__);
-		list_for_each_entry_safe(buf, tmp, &dev->vidq.active, list) {
-			list_del(&buf->list);
-			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_QUEUED);
-		}
 		return PTR_ERR(q->kthread);
 	}
+	wake_up_interruptible(&q->wq);
 	return 0;
 }
 
@@ -281,17 +256,16 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 	f->fmt.pix.height = dev->height;
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 	f->fmt.pix.pixelformat = dev->pixelformat;
+	f->fmt.pix.bytesperline = f->fmt.pix.width * dev->pixelsize;
+	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
 	switch (f->fmt.pix.pixelformat) {
 	case V4L2_PIX_FMT_YUYV:
-		f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 		break;
 	case V4L2_PIX_FMT_RGB24:
-		f->fmt.pix.bytesperline = f->fmt.pix.width * 3;
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
 		break;
 	}
-	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
 	return 0;
 }
 
@@ -301,24 +275,30 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 
 	switch (f->fmt.pix.pixelformat) {
 	case V4L2_PIX_FMT_YUYV:
+		dev->input = 0;
 		dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
+		dev->pixelsize = 2;
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 		break;
 	case V4L2_PIX_FMT_RGB24:
+		dev->input = 1;
 		dev->pixelformat = V4L2_PIX_FMT_RGB24;
-		f->fmt.pix.bytesperline = f->fmt.pix.width * 3;
+		dev->pixelsize = 3;
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
 		break;
 	default:
 		v4l2_err(&dev->v4l2_dev, "%s: Unknown format..\n", __func__);
-		dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		f->fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-		f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
+		dev->input = 0;
+		f->fmt.pix.pixelformat = dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		dev->pixelsize = 2;
 		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 		break;
 	}
+
+	dev->width = f->fmt.pix.width;
+	dev->height = f->fmt.pix.height;
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
+	f->fmt.pix.bytesperline = f->fmt.pix.width * dev->pixelsize;
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
 	return 0;
 }
@@ -330,29 +310,12 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 	int ret;
 
 	ret = vidioc_try_fmt_vid_cap(file, priv, f);
-	if (ret < 0)
-		return ret;
 
 	if (vb2_is_busy(q)) {
 		v4l2_err(&dev->v4l2_dev, "%s device busy..\n", __func__);
 		return -EBUSY;
 	}
-
-	switch (f->fmt.pix.pixelformat) {
-	case V4L2_PIX_FMT_YUYV:
-		dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		dev->pixelsize = 2;
-	case V4L2_PIX_FMT_RGB24:
-		dev->pixelformat = V4L2_PIX_FMT_RGB24;
-		dev->pixelsize = 3;
-	default:
-		dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		dev->pixelsize = 2;
-	}
-
-	dev->width = f->fmt.pix.width;
-	dev->height = f->fmt.pix.height;
-	return 0;
+	return ret;
 }
 
 static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize)
@@ -363,7 +326,7 @@ static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsi
 
 	if (fsize->index)
 		return -EINVAL;
-	if ((fsize->pixel_format != V4L2_PIX_FMT_YUYV) || (fsize->pixel_format != V4L2_PIX_FMT_RGB24))
+	if ((fsize->pixel_format != V4L2_PIX_FMT_YUYV) && (fsize->pixel_format != V4L2_PIX_FMT_RGB24))
 		return -EINVAL;
 	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
 	fsize->stepwise = sizes;
@@ -392,13 +355,24 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct dev_data *dev = video_drvdata(file);
 
-	if (i >= 1)
-		return -EINVAL;
-
 	if (i == dev->input)
 		return 0;
 
 	dev->input = i;
+
+	switch (i) {
+	case 0:
+		dev->pixelsize = 2;
+		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		break;
+	case 1:
+		dev->pixelsize = 3;
+		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		break;
+	default:
+		return -EINVAL;
+	}
+
 	ffe_initialize(dev->width, dev->pixelsize);
 	return 0;
 }
@@ -408,7 +382,7 @@ static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2
 	if (fival->index)
 		return -EINVAL;
 
-	if ((fival->pixel_format != V4L2_PIX_FMT_YUYV) || (fival->pixel_format != V4L2_PIX_FMT_RGB24))
+	if ((fival->pixel_format != V4L2_PIX_FMT_YUYV) && (fival->pixel_format != V4L2_PIX_FMT_RGB24))
 		return -EINVAL;
 
 	fival->type = V4L2_FRMIVAL_TYPE_CONTINUOUS;
@@ -539,6 +513,7 @@ static int p_probe(struct platform_device *pdev)
 	dev->width = 640;
 	dev->height = 360;
 	dev->pixelsize = 2;
+	dev->input = 0;
 
 	hdl = &dev->ctrl_handler;
 	v4l2_ctrl_handler_init(hdl, 4);
