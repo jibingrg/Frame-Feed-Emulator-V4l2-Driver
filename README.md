@@ -15,9 +15,9 @@ Dependencies : v4l2-utils
 
 2. Insert module
 
-		$ sudo insmod frame_feed_emulator.ko
+		$ sudo insmod FFE/frame_feed_emulator.ko
 		
-		$ sudo insmod driver_v4l2.ko
+		$ sudo insmod FFE/driver_v4l2.ko
 
 
 3. dmesg will give the node name
@@ -29,17 +29,11 @@ Dependencies : v4l2-utils
 
 	a) FFPLAY
 	
-		$ ffplay /dev/video1
-		
-		$ ffplay -framerate 30 /dev/video1
-		
-		$ ffplay -video_size 1280x720 /dev/video1
+		$ ffplay -video_size 1280x720 -framerate 30 /dev/video1
 	
 	b) MPLAYER
 		
 		$ mplayer tv:// -tv driver=v4l2:device=/dev/video1:width=1280:height=720:fps=30:outfmt=yuy2
-		
-		$ mplayer tv:// -tv driver=v4l2:device=/dev/video1:width=1280:height=720:fps=30:outfmt=mjpg
 		
 	c) GStreamer Pipeline
 
