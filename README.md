@@ -25,7 +25,7 @@ Dependencies : v4l2-utils
 3. Insert module
 
 		$ sudo insmod FFE/frame_feed_emulator.ko
-		$ sudo insmod FFE/driver_v4l2.ko
+		$ sudo insmod V4L2D/driver_v4l2.ko
 
 4. dmesg will give the node name
 
