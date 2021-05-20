@@ -11,8 +11,8 @@
 
 #include "driver_v4l2.h"
 
-#define MAX_WIDTH			3840
-#define MAX_HEIGHT			2160
+#define MAX_WIDTH			1280
+#define MAX_HEIGHT			720
 #define MAX_FPS				1000
 
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
@@ -90,13 +90,13 @@ static int ffe_thread(void *data)
 
 		if (list_empty(&q->active)) {
 			v4l2_err(&dev->v4l2_dev, "%s: No active queue\n", __func__);
-			spin_unlock_irqrestore(&dev->s_lock, flags);	
+			spin_unlock_irqrestore(&dev->s_lock, flags);
 		} else {
 			buf = list_entry(q->active.next, struct ffe_buffer, list);
 			vbuf = vb2_plane_vaddr(&buf->vb, 0);
 			list_del(&buf->list);
 			spin_unlock_irqrestore(&dev->s_lock, flags);
-			ffe_generate(dev->width, dev->height, dev->pixelsize, vbuf);
+			ffe_generate(vbuf);
 			buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
 			buf->v4l2_buf.sequence = dev->f_count++;
 			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
@@ -120,7 +120,7 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned in
 
 	*nplanes = 1;
 	sizes[0] = size;
-
+	ffe_initialize(dev->width, dev->height, dev->pixelsize);
 	v4l2_info(&dev->v4l2_dev, "%s: width = %d, height = %d, size = %ld\n", __func__, dev->width, dev->height, size);
 	return 0;
 }
@@ -142,7 +142,6 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	}
 
 	vb2_set_plane_payload(&buf->vb, 0, size);
-	ffe_initialize(dev->width, dev->pixelsize);
 	return 0;
 }
 
@@ -295,11 +294,25 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 		break;
 	}
 
-	dev->width = f->fmt.pix.width;
-	dev->height = f->fmt.pix.height;
+	if (f->fmt.pix.width <= 480) {
+		f->fmt.pix.width = dev->width = 480;
+		f->fmt.pix.height = dev->height = 270;
+	} else if (f->fmt.pix.width <= 640) {
+		f->fmt.pix.width = dev->width = 640;
+		f->fmt.pix.height = dev->height = 360;
+	} else {
+		if (dev->pixelsize == 2) {
+			f->fmt.pix.width = dev->width = 1280;
+			f->fmt.pix.height = dev->height = 720;
+		} else {
+			f->fmt.pix.width = dev->width = 640;
+			f->fmt.pix.height = dev->height = 360;
+		}
+	}
+
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
-	f->fmt.pix.bytesperline = f->fmt.pix.width * dev->pixelsize;
-	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
+	f->fmt.pix.bytesperline = dev->width * dev->pixelsize;
+	f->fmt.pix.sizeimage = dev->height * f->fmt.pix.bytesperline;
 	return 0;
 }
 
@@ -307,29 +320,39 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 {
 	struct dev_data *dev = video_drvdata(file);
 	struct vb2_queue *q = &dev->queue;
-	int ret;
 
-	ret = vidioc_try_fmt_vid_cap(file, priv, f);
+	vidioc_try_fmt_vid_cap(file, priv, f);
 
 	if (vb2_is_busy(q)) {
 		v4l2_err(&dev->v4l2_dev, "%s device busy..\n", __func__);
 		return -EBUSY;
 	}
-	return ret;
+	return 0;
 }
 
 static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize)
 {
-	static const struct v4l2_frmsize_stepwise sizes = {
-		48, MAX_WIDTH, 4, 32, MAX_HEIGHT, 1
+	int i;
+	static const struct v4l2_frmsize_discrete sizes[3] = {
+		{480, 270}, {640, 360}, {1280, 720}
 	};
 
-	if (fsize->index)
+	switch (fsize->pixel_format) {
+	case V4L2_PIX_FMT_YUYV:
+		i = 3;
+		break;
+	case V4L2_PIX_FMT_RGB24:
+		i = 2;
+		break;
+	default:
 		return -EINVAL;
-	if ((fsize->pixel_format != V4L2_PIX_FMT_YUYV) && (fsize->pixel_format != V4L2_PIX_FMT_RGB24))
+	}
+
+	if (fsize->index >= i)
 		return -EINVAL;
-	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
-	fsize->stepwise = sizes;
+
+	fsize->type = V4L2_FRMSIZE_TYPE_DISCRETE;
+	fsize->discrete = sizes[fsize->index];
 	return 0;
 }
 
@@ -367,13 +390,13 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 		break;
 	case 1:
 		dev->pixelsize = 3;
-		dev->pixelformat = V4L2_PIX_FMT_YUYV;
+		dev->pixelformat = V4L2_PIX_FMT_RGB24;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	ffe_initialize(dev->width, dev->pixelsize);
+	ffe_initialize(dev->width, dev->height, dev->pixelsize);
 	return 0;
 }
 
