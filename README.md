@@ -13,6 +13,8 @@ Dependencies : v4l2-utils
 		$ cd sample
 		$ tar -xf rgb_480x270.tar.xz
 		$ tar -xf rgb_640x360.tar.xz
+		$ cat sample_1280x720_5s.tar.xz.parta* > yuyv_sample_1280x720_5s.tar.xz && tar -xf sample_1280x720_5s.tar.xz
+		$ cat sample_1920x1080_5s.tar.xz.parta* > yuyv_sample_1920x1080_5s.tar.xz && tar -xf sample_1920x1080_5s.tar.xz
 		$ tar -xf yuyv_480x270.tar.xz
 		$ tar -xf yuyv_640x360.tar.xz
 		$ tar -xf yuyv_1280x720_5s.tar.xz
