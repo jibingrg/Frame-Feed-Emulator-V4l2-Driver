@@ -11,9 +11,11 @@
 
 #include "driver_v4l2.h"
 
-#define MAX_WIDTH			1280
-#define MAX_HEIGHT			720
-#define MAX_FPS				1000
+#define MAX_WIDTH			3840
+#define MAX_HEIGHT			2160
+#define MAX_FPS				120
+#define MAX_WIDTH_RGB			1920
+#define MAX_HEIGHT_RGB			1080
 
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
 MODULE_LICENSE("GPL");
@@ -118,6 +120,11 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned in
 	struct dev_data *dev = vb2_get_drv_priv(vq);
 	unsigned long size = dev->width * dev->height * dev->pixelsize;
 
+	if (dev->width > ((dev->pixelsize == 2) ? MAX_WIDTH : MAX_WIDTH_RGB) || dev->height > ((dev->pixelsize == 2) ? MAX_HEIGHT : MAX_HEIGHT_RGB)) {
+		v4l2_err(&dev->v4l2_dev, "%s: width or height is larger than expected..\n", __func__);
+		return -EINVAL;
+	}
+
 	*nplanes = 1;
 	sizes[0] = size;
 	ffe_initialize(dev->width, dev->height, dev->pixelsize);
@@ -130,11 +137,6 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	struct dev_data *dev = vb2_get_drv_priv(vb->vb2_queue);
 	struct ffe_buffer *buf = container_of(vb, struct ffe_buffer, vb);
 	unsigned long size = dev->width * dev->height * dev->pixelsize;
-
-	if (dev->width > MAX_WIDTH || dev->height > MAX_HEIGHT) {
-		v4l2_err(&dev->v4l2_dev, "%s: width or height is larger than expected..\n", __func__);
-		return -EINVAL;
-	}
 
 	if (vb2_plane_size(vb, 0) < size) {
 		v4l2_err(&dev->v4l2_dev, "%s: vb2 plane size is less than required..\n", __func__);
@@ -300,14 +302,22 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 	} else if (f->fmt.pix.width <= 640) {
 		f->fmt.pix.width = dev->width = 640;
 		f->fmt.pix.height = dev->height = 360;
+	} else if (f->fmt.pix.width <= 1280) {
+		f->fmt.pix.width = dev->width = 1280;
+		f->fmt.pix.height = dev->height = 720;
+	} else if (f->fmt.pix.width <= 1920) {
+		f->fmt.pix.width = dev->width = 1920;
+		f->fmt.pix.height = dev->height = 1080;
+	} else if (f->fmt.pix.width <= 2560) {
+		f->fmt.pix.width = dev->width = 2560;
+		f->fmt.pix.height = dev->height = 1440;
+	} else if (f->fmt.pix.width <= 3840) {
+		f->fmt.pix.width = dev->width = 3840;
+		f->fmt.pix.height = dev->height = 2160;
 	} else {
-		if (dev->pixelsize == 2) {
-			f->fmt.pix.width = dev->width = 1280;
-			f->fmt.pix.height = dev->height = 720;
-		} else {
-			f->fmt.pix.width = dev->width = 640;
-			f->fmt.pix.height = dev->height = 360;
-		}
+		dev->width = f->fmt.pix.width;
+		dev->height = f->fmt.pix.height;
+		return -EINVAL;
 	}
 
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
@@ -333,16 +343,16 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize)
 {
 	int i;
-	static const struct v4l2_frmsize_discrete sizes[3] = {
-		{480, 270}, {640, 360}, {1280, 720}
+	static const struct v4l2_frmsize_discrete sizes[6] = {
+		{480, 270}, {640, 360}, {1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}
 	};
 
 	switch (fsize->pixel_format) {
 	case V4L2_PIX_FMT_YUYV:
-		i = 3;
+		i = 6;
 		break;
 	case V4L2_PIX_FMT_RGB24:
-		i = 2;
+		i = 4;
 		break;
 	default:
 		return -EINVAL;

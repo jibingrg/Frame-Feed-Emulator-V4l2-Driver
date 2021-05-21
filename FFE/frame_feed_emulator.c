@@ -19,7 +19,7 @@ struct videodata {
 struct file *file;
 mm_segment_t fs;
 loff_t pos;
-int count;
+int count, fcount;
 bool flag = true;
 
 static void ffe_initialize(unsigned int width, unsigned int height, unsigned int pixelsize);
@@ -34,7 +34,7 @@ static void ffe_initialize(unsigned int width, unsigned int height, unsigned int
 	vdata.pixelsize = pixelsize;
 	vdata.size = vdata.width * vdata.height * vdata.pixelsize;
 	flag = false;
-	pos = 0;
+	pos = count = 0;
 
 	if (pixelsize == 2) {
 		switch (width) {
@@ -42,6 +42,7 @@ static void ffe_initialize(unsigned int width, unsigned int height, unsigned int
 			set_fs(KERNEL_DS);
 			file = filp_open("sample/yuyv_480x270.yuv", O_RDONLY, 0);
 			set_fs(fs);
+			fcount = 900;
 			if (IS_ERR(file))
 				flag = true;
 			break;
@@ -49,13 +50,39 @@ static void ffe_initialize(unsigned int width, unsigned int height, unsigned int
 			set_fs(KERNEL_DS);
 			file = filp_open("sample/yuyv_640x360.yuv", O_RDONLY, 0);
 			set_fs(fs);
+			fcount = 900;
 			if (IS_ERR(file))
 				flag = true;
 			break;
 		case 1280:
 			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_1280x720.yuv", O_RDONLY, 0);
+			file = filp_open("sample/yuyv_sample_1280x720_5s.yuv", O_RDONLY, 0);
 			set_fs(fs);
+			fcount = 120;
+			if (IS_ERR(file))
+				flag = true;
+			break;
+		case 1920:
+			set_fs(KERNEL_DS);
+			file = filp_open("sample/yuyv_sample_1920x1080_5s.yuv", O_RDONLY, 0);
+			set_fs(fs);
+			fcount = 120;
+			if (IS_ERR(file))
+				flag = true;
+			break;
+		case 2560:
+			set_fs(KERNEL_DS);
+			file = filp_open("sample/yuyv_sample_2560x1440_5s.yuv", O_RDONLY, 0);
+			set_fs(fs);
+			fcount = 120;
+			if (IS_ERR(file))
+				flag = true;
+			break;
+		case 3840:
+			set_fs(KERNEL_DS);
+			file = filp_open("sample/yuyv_sample_3840x2160_5s.yuv", O_RDONLY, 0);
+			set_fs(fs);
+			fcount = 120;
 			if (IS_ERR(file))
 				flag = true;
 			break;
@@ -69,6 +96,7 @@ static void ffe_initialize(unsigned int width, unsigned int height, unsigned int
 			set_fs(KERNEL_DS);
 			file = filp_open("sample/rgb_480x270.rgb", O_RDONLY, 0);
 			set_fs(fs);
+			fcount = 900;
 			if (IS_ERR(file))
 				flag = true;
 			break;
@@ -76,6 +104,23 @@ static void ffe_initialize(unsigned int width, unsigned int height, unsigned int
 			set_fs(KERNEL_DS);
 			file = filp_open("sample/rgb_640x360.rgb", O_RDONLY, 0);
 			set_fs(fs);
+			fcount = 900;
+			if (IS_ERR(file))
+				flag = true;
+			break;
+		case 1280:
+			set_fs(KERNEL_DS);
+			file = filp_open("sample/sample_1280x720_5s.rgb", O_RDONLY, 0);
+			set_fs(fs);
+			fcount = 120;
+			if (IS_ERR(file))
+				flag = true;
+			break;
+		case 1920:
+			set_fs(KERNEL_DS);
+			file = filp_open("sample/sample_1920x1080_5s.rgb", O_RDONLY, 0);
+			set_fs(fs);
+			fcount = 120;
 			if (IS_ERR(file))
 				flag = true;
 			break;
@@ -106,7 +151,7 @@ static void ffe_generate(void *vbuf)
 		vfs_read(file, vbuf, vdata.size, &pos);
 		set_fs(fs);
 		count++;
-		if (count >= 900) {
+		if (count >= fcount) {
 			pos = 0;
 			count = 0;
 		}
