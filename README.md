@@ -15,7 +15,10 @@ Dependencies : v4l2-utils
 		$ tar -xf rgb_640x360.tar.xz
 		$ tar -xf yuyv_480x270.tar.xz
 		$ tar -xf yuyv_640x360.tar.xz
-		$ tar -xf yuyv_1280x720.tar.xz
+		$ tar -xf yuyv_1280x720_5s.tar.xz
+		$ cat yuyv_sample_1920x1080_5s.tar.xz.parta* > yuyv_sample_1920x1080_5s.tar.xz && tar -xf yuyv_sample_1920x1080_5s.tar.xz
+		$ cat yuyv_sample_2560x1440_5s.tar.xz.parta* > yuyv_sample_2560x1440_5s.tar.xz && tar -xf yuyv_sample_2560x1440_5s.tar.xz
+		$ cat yuyv_sample_3840x2160_5s.tar.xz.parta* > yuyv_sample_3840x2160_5s.tar.xz && tar -xf yuyv_sample_3840x2160_5s.tar.xz
 		$ cd ..
 
 2. Build the project using make
