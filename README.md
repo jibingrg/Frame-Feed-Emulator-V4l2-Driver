@@ -11,51 +11,40 @@ Dependencies : v4l2-utils
 1. Extract raw video files in sample directory
 
 		$ cd sample
-		$ tar -xf rgb_480x270.tar.xz
-		$ tar -xf rgb_640x360.tar.xz
-		$ cat sample_1280x720_5s.tar.xz.parta* > yuyv_sample_1280x720_5s.tar.xz && tar -xf sample_1280x720_5s.tar.xz
-		$ cat sample_1920x1080_5s.tar.xz.parta* > yuyv_sample_1920x1080_5s.tar.xz && tar -xf sample_1920x1080_5s.tar.xz
-		$ tar -xf yuyv_480x270.tar.xz
-		$ tar -xf yuyv_640x360.tar.xz
-		$ tar -xf yuyv_1280x720_5s.tar.xz
-		$ cat yuyv_sample_1920x1080_5s.tar.xz.parta* > yuyv_sample_1920x1080_5s.tar.xz && tar -xf yuyv_sample_1920x1080_5s.tar.xz
-		$ cat yuyv_sample_2560x1440_5s.tar.xz.parta* > yuyv_sample_2560x1440_5s.tar.xz && tar -xf yuyv_sample_2560x1440_5s.tar.xz
-		$ cat yuyv_sample_3840x2160_5s.tar.xz.parta* > yuyv_sample_3840x2160_5s.tar.xz && tar -xf yuyv_sample_3840x2160_5s.tar.xz
+		$ cat video_3840x2160.tar.xz.parta* > video_3840x2160.tar.xz && tar -xf video_3840x2160.tar.xz
 		$ cd ..
 
 2. Build the project using make
 
 		$ make
 
-3. Insert module
+3. Insert FFE module to initiate Frame Feed Emulator
 
 		$ sudo insmod FFE/frame_feed_emulator.ko
+
+4. Insert driver module
+
 		$ sudo insmod V4L2D/driver_v4l2.ko
 
-4. dmesg will give the node name
+5. dmesg will give the node name
 
 		$ dmesg
 
-5. For listing supported video formats
+6. For listing supported video formats
 
 		$ v4l2-ctl -d1 --list-formats-ext
 
-6. play test video using any tools
+7. play test video using any tools
 
 	a) FFPLAY
 	
 		$ ffplay -video_size 640x360 -framerate 30 /dev/video1
-		$ ffplay -video_size 640x360 -framerate 30 -pixel_format rgb24 /dev/video1
-	
-	b) MPLAYER
-		
-		$ mplayer tv:// -tv driver=v4l2:device=/dev/video1:width=640:height=360:fps=30:outfmt=yuy2
 		
 	c) GStreamer Pipeline
 
      	$ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,interlace-mode=interleaved,height=360,width=640 ! videoconvert ! videoscale ! autovideosink
 
-7. Remove module
+8. Remove modules
 		
 		$ sudo rmmod driver_v4l2
 
