@@ -8,171 +8,116 @@
 #include <linux/fs.h>
 #include <linux/fcntl.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
+#include <linux/kthread.h>
+
+#define MAX_WIDTH			3840
+#define MAX_HEIGHT			2160
+#define FRAME_COUNT			120
+#define FRAME_RATE			60
 
 MODULE_LICENSE("GPL");
 
 struct videodata {
 	unsigned int width, height, pixelsize;
-	unsigned long size;
 } vdata;
 
-struct file *file;
-mm_segment_t fs;
-loff_t pos;
-int count, fcount;
-bool flag = true;
+struct frame {
+	u8 *data;
+	struct frame *next;
+} *head, *p;
 
-static void ffe_initialize(unsigned int width, unsigned int height, unsigned int pixelsize);
-EXPORT_SYMBOL(ffe_initialize);
-static void ffe_generate(void *vbuf);
+unsigned long ssize = 2 * MAX_WIDTH * MAX_HEIGHT;
+static struct task_struct *ffe_thread;
+
+static void ffe_generate(unsigned int width, void *vbuf);
 EXPORT_SYMBOL(ffe_generate);
 
-static void ffe_initialize(unsigned int width, unsigned int height, unsigned int pixelsize)
+static void ffe_generate(unsigned int width, void *vbuf)
 {
-	vdata.width = width;
-	vdata.height = height;
-	vdata.pixelsize = pixelsize;
-	vdata.size = vdata.width * vdata.height * vdata.pixelsize;
-	flag = false;
-	pos = count = 0;
-
-	if (pixelsize == 2) {
-		switch (width) {
-		case 480:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_480x270.yuv", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 900;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 640:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_640x360.yuv", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 900;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 1280:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_sample_1280x720_5s.yuv", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 120;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 1920:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_sample_1920x1080_5s.yuv", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 120;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 2560:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_sample_2560x1440_5s.yuv", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 120;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 3840:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/yuyv_sample_3840x2160_5s.yuv", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 120;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		default:
-			flag = true;
-			break;
-		}
-	} else if (pixelsize == 3) {
-		switch (width) {
-		case 480:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/rgb_480x270.rgb", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 900;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 640:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/rgb_640x360.rgb", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 900;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 1280:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/sample_1280x720_5s.rgb", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 120;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		case 1920:
-			set_fs(KERNEL_DS);
-			file = filp_open("sample/sample_1920x1080_5s.rgb", O_RDONLY, 0);
-			set_fs(fs);
-			fcount = 120;
-			if (IS_ERR(file))
-				flag = true;
-			break;
-		default:
-			flag = true;
-			break;
-		}
-	} else {
-		flag = true;
-	}
-}
-
-static void ffe_generate(void *vbuf)
-{
-	int i;
-	u8 color = 0;
+	int i, j;
+	int fract = MAX_WIDTH / width;
 
 	if (!vbuf) {
 		pr_err("%s: buffer error..\n", __func__);
 		return;
 	}
 
-	if (flag) {
-		for (i = 0; i < vdata.size; i++)
-			memcpy(vbuf + i, &color, 1);
-	} else {
-		set_fs(KERNEL_DS);
-		vfs_read(file, vbuf, vdata.size, &pos);
-		set_fs(fs);
-		count++;
-		if (count >= fcount) {
-			pos = 0;
-			count = 0;
+	for (i = 0; i < MAX_HEIGHT; i += fract) {
+		for (j = 0; j < (MAX_WIDTH << 1); j += (fract << 2)) {
+			memcpy(vbuf, p->data + (i * (MAX_WIDTH << 1) + j), 4);
+			vbuf += 4;
 		}
 	}
+
+	p = p->next;
+}
+
+int thread_function(void *data)
+{
+	while (!kthread_should_stop()) {
+		p = p->next;
+		schedule_timeout_interruptible(msecs_to_jiffies(1000/FRAME_RATE));
+	}
+
+	pr_info("%s: exit\n", __func__);
+	return 0;
 }
 
 static int __init ffe_init(void)
 {
+	int i;
+	struct file *file = NULL;
+	mm_segment_t fs = get_fs();
+	loff_t pos = 0;
+
 	pr_info("%s\n", __func__);
-	fs = get_fs();
+
+	p = head = vmalloc(sizeof(struct frame));
+	p->data = vmalloc(ssize);
+	for (i = 1; i < FRAME_COUNT; i++) {
+		p = p->next = vmalloc(sizeof(struct frame));
+		p->data = vmalloc(ssize);
+	}
+	p->next = head;
+
+	set_fs(KERNEL_DS);
+	file = filp_open("sample/video_3840x2160.yuv", O_RDONLY, 0);
+	set_fs(fs);
+	if (!IS_ERR(file)) {
+		for (p = head; p->next != head; p = p->next) {
+			set_fs(KERNEL_DS);
+			vfs_read(file, p->data, ssize, &pos);
+			set_fs(fs);
+		}
+		set_fs(KERNEL_DS);
+		vfs_read(file, p->data, ssize, &pos);
+		filp_close(file, NULL);
+		set_fs(fs);
+	}
+
+	ffe_thread = kthread_run(thread_function, NULL, "FFE Thread");
 	return 0;
 }
 
 
 static void __exit ffe_exit(void)
 {
+	struct frame *q;
+
 	pr_info("%s\n", __func__);
-	if (!flag) {
-		set_fs(KERNEL_DS);
-		filp_close(file, NULL);
-		set_fs(fs);
+	kthread_stop(ffe_thread);
+
+	if (head) {
+		p = head->next;
+		while (p != head) {
+			q = p;
+			p = p->next;
+			vfree(q->data);
+			vfree(q);
+		}
+	vfree(head->data);
+	vfree(head);
 	}
 }
 

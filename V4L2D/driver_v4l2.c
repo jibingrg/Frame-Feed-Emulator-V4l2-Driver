@@ -13,9 +13,7 @@
 
 #define MAX_WIDTH			3840
 #define MAX_HEIGHT			2160
-#define MAX_FPS				120
-#define MAX_WIDTH_RGB			1920
-#define MAX_HEIGHT_RGB			1080
+#define MAX_FPS				60
 
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
 MODULE_LICENSE("GPL");
@@ -84,7 +82,7 @@ static int ffe_thread(void *data)
 	v4l2_info(&dev->v4l2_dev, "%s\n", __func__);
 	set_freezable();
 
-	while (1) {
+	while (!kthread_should_stop()) {
 		DECLARE_WAITQUEUE(wait, current);
 
 		add_wait_queue(&q->wq, &wait);
@@ -98,7 +96,7 @@ static int ffe_thread(void *data)
 			vbuf = vb2_plane_vaddr(&buf->vb, 0);
 			list_del(&buf->list);
 			spin_unlock_irqrestore(&dev->s_lock, flags);
-			ffe_generate(vbuf);
+			ffe_generate(dev->width, vbuf);
 			buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
 			buf->v4l2_buf.sequence = dev->f_count++;
 			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
@@ -108,8 +106,6 @@ static int ffe_thread(void *data)
 		schedule_timeout_interruptible(timeout);
 		remove_wait_queue(&q->wq, &wait);
 		try_to_freeze();
-		if (kthread_should_stop())
-			break;
 	}
 	v4l2_info(&dev->v4l2_dev, "%s: exit\n", __func__);
 	return 0;
@@ -120,14 +116,13 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned in
 	struct dev_data *dev = vb2_get_drv_priv(vq);
 	unsigned long size = dev->width * dev->height * dev->pixelsize;
 
-	if (dev->width > ((dev->pixelsize == 2) ? MAX_WIDTH : MAX_WIDTH_RGB) || dev->height > ((dev->pixelsize == 2) ? MAX_HEIGHT : MAX_HEIGHT_RGB)) {
+	if (dev->width > MAX_WIDTH || dev->height > MAX_HEIGHT) {
 		v4l2_err(&dev->v4l2_dev, "%s: width or height is larger than expected..\n", __func__);
 		return -EINVAL;
 	}
 
 	*nplanes = 1;
 	sizes[0] = size;
-	ffe_initialize(dev->width, dev->height, dev->pixelsize);
 	v4l2_info(&dev->v4l2_dev, "%s: width = %d, height = %d, size = %ld\n", __func__, dev->width, dev->height, size);
 	return 0;
 }
@@ -233,19 +228,12 @@ static int vidioc_querycap(struct file *file, void  *priv, struct v4l2_capabilit
 
 static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv, struct v4l2_fmtdesc *f)
 {
-	if (f->index >= 2)
+	if (f->index)
 		return -EINVAL;
 
-	switch (f->index) {
-	case 0:
-		strlcpy(f->description, "YUV 4:2:2", sizeof(f->description));
-		f->pixelformat = V4L2_PIX_FMT_YUYV;
-		break;
-	case 1:
-		strlcpy(f->description, "RGB3", sizeof(f->description));
-		f->pixelformat = V4L2_PIX_FMT_RGB24;
-		break;
-	}
+	strlcpy(f->description, "YUV 4:2:2", sizeof(f->description));
+	f->pixelformat = V4L2_PIX_FMT_YUYV;
+
 	return 0;
 }
 
@@ -259,14 +247,7 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 	f->fmt.pix.pixelformat = dev->pixelformat;
 	f->fmt.pix.bytesperline = f->fmt.pix.width * dev->pixelsize;
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
-	switch (f->fmt.pix.pixelformat) {
-	case V4L2_PIX_FMT_YUYV:
-		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
-		break;
-	case V4L2_PIX_FMT_RGB24:
-		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
-		break;
-	}
+	f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 	return 0;
 }
 
@@ -274,27 +255,13 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 {
 	struct dev_data *dev = video_drvdata(file);
 
-	switch (f->fmt.pix.pixelformat) {
-	case V4L2_PIX_FMT_YUYV:
-		dev->input = 0;
-		dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		dev->pixelsize = 2;
-		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
-		break;
-	case V4L2_PIX_FMT_RGB24:
-		dev->input = 1;
-		dev->pixelformat = V4L2_PIX_FMT_RGB24;
-		dev->pixelsize = 3;
-		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
-		break;
-	default:
+	if (f->fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV)
 		v4l2_err(&dev->v4l2_dev, "%s: Unknown format..\n", __func__);
-		dev->input = 0;
-		f->fmt.pix.pixelformat = dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		dev->pixelsize = 2;
-		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
-		break;
-	}
+
+	dev->input = 0;
+	f->fmt.pix.pixelformat = dev->pixelformat = V4L2_PIX_FMT_YUYV;
+	dev->pixelsize = 2;
+	f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 
 	if (f->fmt.pix.width <= 480) {
 		f->fmt.pix.width = dev->width = 480;
@@ -308,9 +275,6 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 	} else if (f->fmt.pix.width <= 1920) {
 		f->fmt.pix.width = dev->width = 1920;
 		f->fmt.pix.height = dev->height = 1080;
-	} else if (f->fmt.pix.width <= 2560) {
-		f->fmt.pix.width = dev->width = 2560;
-		f->fmt.pix.height = dev->height = 1440;
 	} else if (f->fmt.pix.width <= 3840) {
 		f->fmt.pix.width = dev->width = 3840;
 		f->fmt.pix.height = dev->height = 2160;
@@ -342,23 +306,11 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 
 static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize)
 {
-	int i;
 	static const struct v4l2_frmsize_discrete sizes[6] = {
-		{480, 270}, {640, 360}, {1280, 720}, {1920, 1080}, {2560, 1440}, {3840, 2160}
+		{480, 270}, {640, 360}, {1280, 720}, {1920, 1080}, {3840, 2160}
 	};
 
-	switch (fsize->pixel_format) {
-	case V4L2_PIX_FMT_YUYV:
-		i = 6;
-		break;
-	case V4L2_PIX_FMT_RGB24:
-		i = 4;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	if (fsize->index >= i)
+	if (fsize->index >= 5)
 		return -EINVAL;
 
 	fsize->type = V4L2_FRMSIZE_TYPE_DISCRETE;
@@ -368,7 +320,7 @@ static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsi
 
 static int vidioc_enum_input(struct file *file, void *priv, struct v4l2_input *inp)
 {
-	if (inp->index >= 2)
+	if (inp->index)
 		return -EINVAL;
 
 	inp->type = V4L2_INPUT_TYPE_CAMERA;
@@ -388,25 +340,10 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 	struct dev_data *dev = video_drvdata(file);
 
-	if (i == dev->input)
-		return 0;
-
-	dev->input = i;
-
-	switch (i) {
-	case 0:
-		dev->pixelsize = 2;
-		dev->pixelformat = V4L2_PIX_FMT_YUYV;
-		break;
-	case 1:
-		dev->pixelsize = 3;
-		dev->pixelformat = V4L2_PIX_FMT_RGB24;
-		break;
-	default:
+	if (i)
 		return -EINVAL;
-	}
 
-	ffe_initialize(dev->width, dev->height, dev->pixelsize);
+	dev->input = 0;
 	return 0;
 }
 
