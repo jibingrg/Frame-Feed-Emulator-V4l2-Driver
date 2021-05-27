@@ -13,7 +13,6 @@
 
 #define MAX_WIDTH			3840
 #define MAX_HEIGHT			2160
-#define MAX_FPS				60
 
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
 MODULE_LICENSE("GPL");
@@ -32,11 +31,6 @@ static struct platform_device p_device = {
 	},
 };
 
-static const struct v4l2_fract
-	tpf_min = {.numerator = 1, .denominator = MAX_FPS},
-	tpf_max = {.numerator = MAX_FPS, .denominator = 1},
-	tpf_default = {.numerator = 1, .denominator = 30};
-
 struct ffe_buffer {
 	struct vb2_buffer		vb;
 	struct list_head		list;
@@ -47,7 +41,6 @@ struct ffe_dmaq {
 	struct list_head		active;
 	struct task_struct		*kthread;
 	wait_queue_head_t		wq;
-	int				frame;
 };
 
 struct dev_data {
@@ -63,27 +56,46 @@ struct dev_data {
 	struct vb2_queue		queue;
 	struct ffe_dmaq			vidq;
 	u32				pixelformat;
-	struct v4l2_fract		time_per_frame;
+	struct v4l2_fract		timeperframe;
 	spinlock_t			s_lock;
 	int				input;
 	unsigned int			f_count;
 	unsigned int			width, height, pixelsize;
 };
 
-static int ffe_thread(void *data)
+static void ffe_generate(unsigned int width, void *vbuf)
+{
+	int i, j;
+	int fract = MAX_WIDTH / width;
+
+	if (!vbuf) {
+		pr_err("%s: buffer error..\n", __func__);
+		return;
+	}
+
+	for (i = 0; i < MAX_HEIGHT; i += fract) {
+		for (j = 0; j < (MAX_WIDTH << 1); j += (fract << 2)) {
+			memcpy(vbuf, V_BUF + (i * (MAX_WIDTH << 1) + j), 4);
+			vbuf += 4;
+		}
+	}
+}
+
+static int thread_function(void *data)
 {
 	struct dev_data *dev = data;
 	struct ffe_dmaq *q = &dev->vidq;
 	struct ffe_buffer *buf;
 	unsigned long flags = 0;
-	int timeout;
 	void *vbuf;
 
 	v4l2_info(&dev->v4l2_dev, "%s\n", __func__);
-	set_freezable();
 
 	while (!kthread_should_stop()) {
 		DECLARE_WAITQUEUE(wait, current);
+
+		if (!I_FLAG)
+			continue;
 
 		add_wait_queue(&q->wq, &wait);
 		spin_lock_irqsave(&dev->s_lock, flags);
@@ -102,10 +114,8 @@ static int ffe_thread(void *data)
 			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
 		}
 
-		timeout = msecs_to_jiffies((dev->time_per_frame.numerator * 1000) / dev->time_per_frame.denominator);
-		schedule_timeout_interruptible(timeout);
 		remove_wait_queue(&q->wq, &wait);
-		try_to_freeze();
+		I_FLAG = false;
 	}
 	v4l2_info(&dev->v4l2_dev, "%s: exit\n", __func__);
 	return 0;
@@ -160,8 +170,7 @@ static int start_streaming(struct vb2_queue *vq, unsigned int count)
 	struct ffe_dmaq *q = &dev->vidq;
 
 	dev->f_count = 0;
-	q->frame = 0;
-	q->kthread = kthread_run(ffe_thread, dev, "%s", dev->v4l2_dev.name);
+	q->kthread = kthread_run(thread_function, dev, "%s", dev->v4l2_dev.name);
 
 	if (IS_ERR(q->kthread)) {
 		v4l2_err(&dev->v4l2_dev, "%s: kernel_thread() failed..\n", __func__);
@@ -306,7 +315,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 
 static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize)
 {
-	static const struct v4l2_frmsize_discrete sizes[6] = {
+	static const struct v4l2_frmsize_discrete sizes[] = {
 		{480, 270}, {640, 360}, {1280, 720}, {1920, 1080}, {3840, 2160}
 	};
 
@@ -352,13 +361,11 @@ static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2
 	if (fival->index)
 		return -EINVAL;
 
-	if ((fival->pixel_format != V4L2_PIX_FMT_YUYV) && (fival->pixel_format != V4L2_PIX_FMT_RGB24))
+	if (fival->pixel_format != V4L2_PIX_FMT_YUYV)
 		return -EINVAL;
 
-	fival->type = V4L2_FRMIVAL_TYPE_CONTINUOUS;
-	fival->stepwise.min = tpf_min;
-	fival->stepwise.max = tpf_max;
-	fival->stepwise.step = (struct v4l2_fract) {1, 1};
+	fival->type = V4L2_FRMIVAL_TYPE_DISCRETE;
+	fival->discrete = (struct v4l2_fract) {1, FRAME_RATE};
 	return 0;
 }
 
@@ -370,7 +377,7 @@ static int vidioc_g_parm(struct file *file, void *priv, struct v4l2_streamparm *
 		return -EINVAL;
 
 	parm->parm.capture.capability   = V4L2_CAP_TIMEPERFRAME;
-	parm->parm.capture.timeperframe = dev->time_per_frame;
+	parm->parm.capture.timeperframe = dev->timeperframe;
 	parm->parm.capture.readbuffers  = 1;
 	return 0;
 }
@@ -383,13 +390,9 @@ static int vidioc_s_parm(struct file *file, void *priv, struct v4l2_streamparm *
 	if (parm->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 
-	tpf = parm->parm.capture.timeperframe;
-	tpf = tpf.denominator ? tpf : tpf_default;
-	tpf = (u64)tpf.numerator * tpf_min.denominator < (u64)tpf_min.numerator * tpf.denominator ? tpf_min : tpf;
-	tpf = (u64)tpf.numerator * tpf_max.denominator > (u64)tpf_max.numerator * tpf.denominator ? tpf_max : tpf;
+	tpf = (struct v4l2_fract) {1, FRAME_RATE};
 
-	dev->time_per_frame = tpf;
-	parm->parm.capture.timeperframe = tpf;
+	dev->timeperframe = parm->parm.capture.timeperframe = tpf;
 	parm->parm.capture.readbuffers = 1;
 	return 0;
 }
@@ -479,7 +482,7 @@ static int p_probe(struct platform_device *pdev)
 	}
 
 	dev->pixelformat = V4L2_PIX_FMT_YUYV;
-	dev->time_per_frame = tpf_default;
+	dev->timeperframe = (struct v4l2_fract) {1, FRAME_RATE};
 	dev->width = 640;
 	dev->height = 360;
 	dev->pixelsize = 2;

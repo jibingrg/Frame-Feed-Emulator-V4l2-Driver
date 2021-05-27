@@ -14,9 +14,18 @@
 #define MAX_WIDTH			3840
 #define MAX_HEIGHT			2160
 #define FRAME_COUNT			120
-#define FRAME_RATE			60
+#define FPS_DEFAULT			25
 
 MODULE_LICENSE("GPL");
+
+int FRAME_RATE = FPS_DEFAULT;
+EXPORT_SYMBOL(FRAME_RATE);
+
+u8 *V_BUF = NULL;
+EXPORT_SYMBOL(V_BUF);
+
+bool I_FLAG = false;
+EXPORT_SYMBOL(I_FLAG);
 
 struct videodata {
 	unsigned int width, height, pixelsize;
@@ -30,34 +39,20 @@ struct frame {
 unsigned long ssize = 2 * MAX_WIDTH * MAX_HEIGHT;
 static struct task_struct *ffe_thread;
 
-static void ffe_generate(unsigned int width, void *vbuf);
-EXPORT_SYMBOL(ffe_generate);
-
-static void ffe_generate(unsigned int width, void *vbuf)
+int ffe_thread_function(void *data)
 {
-	int i, j;
-	int fract = MAX_WIDTH / width;
+	unsigned long jf = jiffies;
+	unsigned long timeout;
 
-	if (!vbuf) {
-		pr_err("%s: buffer error..\n", __func__);
-		return;
-	}
-
-	for (i = 0; i < MAX_HEIGHT; i += fract) {
-		for (j = 0; j < (MAX_WIDTH << 1); j += (fract << 2)) {
-			memcpy(vbuf, p->data + (i * (MAX_WIDTH << 1) + j), 4);
-			vbuf += 4;
-		}
-	}
-
-	p = p->next;
-}
-
-int thread_function(void *data)
-{
-	while (!kthread_should_stop()) {
+	while(!kthread_should_stop()) {
+		I_FLAG = false;
+		V_BUF = p->data;
+		I_FLAG = true;
+		jf = jiffies - jf;
+		timeout = msecs_to_jiffies((1000 / FRAME_RATE) - jf);
+		schedule_timeout_interruptible(timeout);
+		jf = jiffies;
 		p = p->next;
-		schedule_timeout_interruptible(msecs_to_jiffies(1000/FRAME_RATE));
 	}
 
 	pr_info("%s: exit\n", __func__);
@@ -85,7 +80,7 @@ static int __init ffe_init(void)
 	file = filp_open("sample/video_3840x2160.yuv", O_RDONLY, 0);
 	set_fs(fs);
 	if (!IS_ERR(file)) {
-		for (p = head; p->next != head; p = p->next) {
+		for(p = head; p->next != head; p = p->next) {
 			set_fs(KERNEL_DS);
 			vfs_read(file, p->data, ssize, &pos);
 			set_fs(fs);
@@ -96,7 +91,8 @@ static int __init ffe_init(void)
 		set_fs(fs);
 	}
 
-	ffe_thread = kthread_run(thread_function, NULL, "FFE Thread");
+	p = head;
+	ffe_thread = kthread_run(ffe_thread_function, NULL, "FFE Thread");
 	return 0;
 }
 

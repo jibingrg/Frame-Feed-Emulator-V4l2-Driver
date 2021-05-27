@@ -2,5 +2,7 @@
 
 #ifndef DRIVER_V4L2_H
 #define DRIVER_V4L2_H
-extern void ffe_generate(unsigned int width, void *vbuf);
+extern int FRAME_RATE;
+extern u8 *V_BUF;
+extern bool I_FLAG;
 #endif
