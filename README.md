@@ -38,11 +38,11 @@ Dependencies : v4l2-utils
 
 	a) FFPLAY
 	
-		$ ffplay -video_size 640x360 -framerate 30 /dev/video1
+		$ ffplay -pixel_format yuyv422 -video_size 3840x2160 /dev/video1
 		
 	c) GStreamer Pipeline
 
-     	$ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,interlace-mode=interleaved,height=360,width=640 ! videoconvert ! videoscale ! autovideosink
+     	$ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,interlace-mode=interleaved,width=3840,height=2160 ! videoconvert ! videoscale ! autovideosink
 
 8. Remove modules
 		
