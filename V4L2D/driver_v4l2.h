@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* SPDX-License-Identifier: GPL */
 
 #ifndef DRIVER_V4L2_H
 #define DRIVER_V4L2_H

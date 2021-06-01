@@ -1,5 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
+// SPDX-License-Identifier: GPL
 
+#include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/freezer.h>
@@ -20,7 +22,7 @@ MODULE_LICENSE("GPL");
 
 static void p_release(struct device *dev)
 {
-	dev_info(dev, "%s", __func__);
+	dev_info(dev, "%s: release", __func__);
 }
 
 static struct platform_device p_device = {
@@ -63,7 +65,7 @@ struct dev_data {
 	unsigned int			width, height, pixelsize;
 };
 
-static void ffe_generate(unsigned int width, void *vbuf)
+static void stream_frame(unsigned int width, void *vbuf)
 {
 	int i, j;
 	int fract = MAX_WIDTH / width;
@@ -89,7 +91,7 @@ static int thread_function(void *data)
 	unsigned long flags = 0;
 	void *vbuf;
 
-	v4l2_info(&dev->v4l2_dev, "%s\n", __func__);
+	v4l2_info(&dev->v4l2_dev, "%s: k_thread\n", __func__);
 
 	while (!kthread_should_stop()) {
 		DECLARE_WAITQUEUE(wait, current);
@@ -108,7 +110,7 @@ static int thread_function(void *data)
 			vbuf = vb2_plane_vaddr(&buf->vb, 0);
 			list_del(&buf->list);
 			spin_unlock_irqrestore(&dev->s_lock, flags);
-			ffe_generate(dev->width, vbuf);
+			stream_frame(dev->width, vbuf);
 			buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
 			buf->v4l2_buf.sequence = dev->f_count++;
 			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
@@ -117,7 +119,7 @@ static int thread_function(void *data)
 		remove_wait_queue(&q->wq, &wait);
 		I_FLAG = false;
 	}
-	v4l2_info(&dev->v4l2_dev, "%s: exit\n", __func__);
+	v4l2_info(&dev->v4l2_dev, "%s: k_thread exit\n", __func__);
 	return 0;
 }
 
@@ -146,6 +148,11 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	if (vb2_plane_size(vb, 0) < size) {
 		v4l2_err(&dev->v4l2_dev, "%s: vb2 plane size is less than required..\n", __func__);
 		return -EINVAL;
+	}
+
+	if (!V_BUF) {
+		v4l2_err(&dev->v4l2_dev, "%s: FFE is not initialized..\n", __func__);
+		return -ENODATA;
 	}
 
 	vb2_set_plane_payload(&buf->vb, 0, size);
@@ -240,7 +247,7 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv, struct v4l2_fm
 	if (f->index)
 		return -EINVAL;
 
-	strlcpy(f->description, "YUV 4:2:2", sizeof(f->description));
+	strscpy(f->description, "YUV 4:2:2", sizeof(f->description));
 	f->pixelformat = V4L2_PIX_FMT_YUYV;
 
 	return 0;
@@ -310,6 +317,7 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 		v4l2_err(&dev->v4l2_dev, "%s device busy..\n", __func__);
 		return -EBUSY;
 	}
+
 	return 0;
 }
 
@@ -371,13 +379,15 @@ static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2
 
 static int vidioc_g_parm(struct file *file, void *priv, struct v4l2_streamparm *parm)
 {
+	struct v4l2_fract tpf;
 	struct dev_data *dev = video_drvdata(file);
 
 	if (parm->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 
+	tpf = (struct v4l2_fract) {1, FRAME_RATE};
 	parm->parm.capture.capability   = V4L2_CAP_TIMEPERFRAME;
-	parm->parm.capture.timeperframe = dev->timeperframe;
+	parm->parm.capture.timeperframe = dev->timeperframe = tpf;
 	parm->parm.capture.readbuffers  = 1;
 	return 0;
 }
@@ -468,7 +478,7 @@ static int p_probe(struct platform_device *pdev)
 	struct v4l2_ctrl_handler *hdl;
 	int ret;
 
-	dev_info(&pdev->dev, "%s\n", __func__);
+	dev_info(&pdev->dev, "%s: probe function\n", __func__);
 	dev = devm_kzalloc(&pdev->dev, sizeof(struct dev_data), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
@@ -483,21 +493,17 @@ static int p_probe(struct platform_device *pdev)
 
 	dev->pixelformat = V4L2_PIX_FMT_YUYV;
 	dev->timeperframe = (struct v4l2_fract) {1, FRAME_RATE};
-	dev->width = 640;
-	dev->height = 360;
+	dev->width = 3840;
+	dev->height = 2160;
 	dev->pixelsize = 2;
 	dev->input = 0;
 
 	hdl = &dev->ctrl_handler;
 	v4l2_ctrl_handler_init(hdl, 4);
-	dev->brightness = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
-			V4L2_CID_BRIGHTNESS, 0, 255, 1, 127);
-	dev->contrast = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
-			V4L2_CID_CONTRAST, 0, 255, 1, 16);
-	dev->saturation = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
-			V4L2_CID_SATURATION, 0, 255, 1, 127);
-	dev->hue = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops,
-			V4L2_CID_HUE, -128, 127, 1, 0);
+	dev->brightness = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_BRIGHTNESS, 0, 255, 1, 127);
+	dev->contrast = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_CONTRAST, 0, 255, 1, 16);
+	dev->saturation = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_SATURATION, 0, 255, 1, 127);
+	dev->hue = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_HUE, -128, 127, 1, 0);
 
 	if (hdl->error) {
 		dev_err(&pdev->dev, "%s: v4l2 control handler error..\n", __func__);
@@ -531,13 +537,14 @@ static int p_probe(struct platform_device *pdev)
 	init_waitqueue_head(&dev->vidq.wq);
 
 	vdev = &dev->vdev;
-	strlcpy(vdev->name, KBUILD_MODNAME, sizeof(vdev->name));
+	strscpy(vdev->name, KBUILD_MODNAME, sizeof(vdev->name));
 	vdev->release = video_device_release_empty;
 	vdev->fops = &ffe_fops;
 	vdev->ioctl_ops = &ffe_ioctl_ops;
 	vdev->v4l2_dev = &dev->v4l2_dev;
 	vdev->queue = q;
 	vdev->lock = &dev->mutex;
+	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING | V4L2_CAP_READWRITE;
 	video_set_drvdata(vdev, dev);
 
 	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
@@ -557,7 +564,7 @@ static int p_remove(struct platform_device *pdev)
 {
 	struct dev_data *dev;
 
-	dev_info(&pdev->dev, "%s\n", __func__);
+	dev_info(&pdev->dev, "%s: remove function\n", __func__);
 	dev = platform_get_drvdata(pdev);
 	v4l2_info(&dev->v4l2_dev, "%s: unregistering %s\n", __func__, video_device_node_name(&dev->vdev));
 	video_unregister_device(&dev->vdev);
@@ -579,7 +586,7 @@ static int __init v4l2_init(void)
 {
 	int ret;
 
-	pr_info("%s\n", __func__);
+	pr_info("%s: Inserting V4L2 driver module\n", __func__);
 
 	ret = platform_device_register(&p_device);
 	if (ret) {
@@ -597,7 +604,7 @@ static int __init v4l2_init(void)
 
 static void __exit v4l2_exit(void)
 {
-	pr_info("%s\n", __func__);
+	pr_info("%s: Removing V4L2 driver module\n", __func__);
 
 	platform_driver_unregister(&p_driver);
 	platform_device_unregister(&p_device);
