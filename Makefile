@@ -6,10 +6,12 @@ PWD := $(shell pwd)
 all :
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
 	gcc user/ff_initializer.c -o user/ff_initializer
+	gcc user/ff_app.c -o user/FFApp
 
 clean :
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) clean
 	rm user/ff_initializer
+	rm user/FFApp
 
 sample : sample/video_3840x2160.tar.xz
 	tar -xf sample/video_3840x2160.tar.xz -C sample
