@@ -2,47 +2,46 @@
 
 **V4L2 driver with Frame Feed Emulator**
 
-Frame Feed Emulator emulate video frames of different video formats YUYV-480x270, YUYV-640x360, YUYV-1280x720, RGB-480x270, and RGB-640x360. The user can stream this test frames through v4l2 driver using v4l2 api calls.
+Frame Feed Emulator emulate video frames of video format YUYV422 with different sizes 480x270, 640x360, 1280x720, 1920x1080, and 3840x2160. The user can stream this test frames through v4l2 driver using v4l2 api calls.
 
-Tested Platform : Ubuntu 18.04.5 LTS (4.15.0-141-generic)
+Tested Platform : Ubuntu 18.04.5 LTS (5.4.0-73-generic)
 
 Dependencies : v4l2-utils
 
-1. Extract raw video files in sample directory
+1. Extract raw video files in sample directory using make command
 
-		$ cd sample
-		$ cat video_3840x2160.tar.xz.parta* > video_3840x2160.tar.xz && tar -xf video_3840x2160.tar.xz
-		$ cd ..
+		$ make sample
 
-2. Build the project using make
+2. Build the project using make command
 
 		$ make
 
-3. Insert FFE module to initiate Frame Feed Emulator
+3. Insert kernel modules
 
 		$ sudo insmod FFE/frame_feed_emulator.ko
-
-4. Insert driver module
-
 		$ sudo insmod V4L2D/driver_v4l2.ko
 
-5. dmesg will give the node name
+4. dmesg will give the node name
 
 		$ dmesg
 
+5. Initialize the FFE with frame rate and frame count required
+
+		$ sudo ./user/ff_initialize <frame_rate> <frame_count>
+
 6. For listing supported video formats
 
-		$ v4l2-ctl -d1 --list-formats-ext
+		$ v4l2-ctl -d<node_number> --list-formats-ext
 
 7. play test video using any tools
 
 	a) FFPLAY
 	
-		$ ffplay -pixel_format yuyv422 -video_size 3840x2160 /dev/video1
+		$ ffplay -pixel_format yuyv422 -video_size <WIDTHxHEIGHT> /dev/video<node_number>
 		
 	c) GStreamer Pipeline
 
-     	$ gst-launch-1.0 v4l2src device=/dev/video1 ! video/x-raw,interlace-mode=interleaved,width=3840,height=2160 ! videoconvert ! videoscale ! autovideosink
+     	$ gst-launch-1.0 v4l2src device=/dev/video<node_number> ! video/x-raw,interlace-mode=interleaved,width=<WIDTH>,height=<HEIGHT> ! videoconvert ! videoscale ! autovideosink
 
 8. Remove modules
 		
