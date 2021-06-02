@@ -31,7 +31,7 @@ Dependencies : v4l2-utils
 
 6. Run FFApp with video device path as a command line argument
 
-		$ sudo ./user/FFApp /dev/video<node_number>
+		$ sudo ./FFApp /dev/video<node_number>
 
 7. Remove modules
 		
