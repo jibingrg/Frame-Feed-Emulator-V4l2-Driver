@@ -15,16 +15,8 @@
 
 MODULE_LICENSE("GPL");
 
-int FRAME_RATE = FPS_DEFAULT;
-EXPORT_SYMBOL(FRAME_RATE);
-
-u8 *V_BUF;
-EXPORT_SYMBOL(V_BUF);
-
-bool I_FLAG;
-EXPORT_SYMBOL(I_FLAG);
-
 struct ffe_frame {
+	int frame_no;
 	u8 *data;
 	struct ffe_frame *next;
 } *head, *p;
@@ -33,6 +25,15 @@ struct ffe_data {
 	int framerate;
 	int framecount;
 } frame_data;
+
+struct ffe_frame *V_BUF;
+EXPORT_SYMBOL(V_BUF);
+
+int FRAME_RATE = FPS_DEFAULT;
+EXPORT_SYMBOL(FRAME_RATE);
+
+bool I_FLAG;
+EXPORT_SYMBOL(I_FLAG);
 
 dev_t device;
 struct cdev *cdev;
@@ -49,7 +50,7 @@ int ffe_thread_function(void *data)
 
 	while (!kthread_should_stop()) {
 		I_FLAG = false;
-		V_BUF = p->data;
+		V_BUF = p;
 		I_FLAG = true;
 		jf = jiffies - jf;
 		timeout = msecs_to_jiffies((1000 / FRAME_RATE) - jf);
@@ -104,8 +105,10 @@ long ffe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 
 	p = head = vmalloc(sizeof(struct ffe_frame));
+	p->frame_no = 0;
 	p->data = vmalloc(size);
 	for (i = 1; i < frame_data.framecount; i++) {
+		p->frame_no = i;
 		p = p->next = vmalloc(sizeof(struct ffe_frame));
 		p->data = vmalloc(size);
 	}

@@ -75,9 +75,11 @@ static void stream_frame(unsigned int width, void *vbuf)
 		return;
 	}
 
+	pr_info("%s: frame number = %d\n", __func__, V_BUF->frame_no);
+
 	for (i = 0; i < MAX_HEIGHT; i += fract) {
 		for (j = 0; j < (MAX_WIDTH << 1); j += (fract << 2)) {
-			memcpy(vbuf, V_BUF + (i * (MAX_WIDTH << 1) + j), 4);
+			memcpy(vbuf, V_BUF->data + (i * (MAX_WIDTH << 1) + j), 4);
 			vbuf += 4;
 		}
 	}
