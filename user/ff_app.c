@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL */
+// SPDX-License-Identifier: GPL
 
 #include<stdio.h>
 #include<stdlib.h>
@@ -13,65 +13,131 @@
 #define FPS_DEFAULT		25
 #define FCOUNT_DEFAULT		120
 
+#define COLOR_WHITE		{ 0xFF, 0xFF, 0xFF}
+#define COLOR_YELLOW		{ 0xFF, 0xFF, 0x00}
+#define COLOR_CYAN		{ 0x00, 0xFF, 0xFF}
+#define COLOR_GREEN		{ 0x00, 0xFF, 0x00}
+#define COLOR_MAGENTA		{ 0xFF, 0x00, 0xFF}
+#define COLOR_RED		{ 0xFF, 0x00, 0x00}
+#define COLOR_BLUE		{ 0x00, 0x00, 0xFF}
+#define COLOR_BLACK		{ 0x00, 0x00, 0x00}
+
+static const unsigned char bar[8][3] = {
+	COLOR_WHITE, COLOR_YELLOW, COLOR_CYAN, COLOR_GREEN, COLOR_MAGENTA, COLOR_RED, COLOR_BLUE, COLOR_BLACK
+};
+
 struct ffe_data {
 	int framerate;
 	int framecount;
-};
+} data;
 
-void ff_init(struct ffe_data data)
+void ff_init(int cmd)
 {
 	int fd1, fd2, i, j;
 	unsigned int bytesperline = 2 * MAX_WIDTH;
 	unsigned char *buf = malloc(bytesperline);
 
-	fd1 = open("sample/video_3840x2160.yuv", O_RDONLY);
-	if (fd1 < 0) {
-		printf("Sample file open error..\n");
-		return;
-	}
+	printf("Enter framerate: ");
+	scanf("%d", &data.framerate);
 
-	fd2 = open("/dev/FFE", O_RDWR);
-	if (fd2 < 0) {
+	if ((!data.framerate) || (data.framerate > MAX_FPS))
+		data.framerate = FPS_DEFAULT;
+
+	fd1 = open("/dev/FFE", O_RDWR);
+	if (fd1 < 0) {
 		printf("FFE open error..\n");
 		return;
 	}
 
-	ioctl(fd2, 0, &data);
+	if (cmd) {
+		int flag;
+		int start, end;
+		unsigned char yuv[8][3];
+		unsigned char colorbar[MAX_WIDTH * 4], *p;
 
-	for (i = 0; i < data.framecount; i++) {
-		for (j = 0; j < MAX_HEIGHT; j++) {
-			read(fd1, buf, bytesperline);
-			write(fd2, buf, bytesperline);
+		data.framecount = FCOUNT_DEFAULT;
+		printf("\nframe rate = %d\tframe count = %d\n", data.framerate, data.framecount);
+		ioctl(fd1, 0, &data);
+
+		for (i = 0; i < 8; i++) {
+			yuv[i][0] = (((16829 * bar[i][0] + 33039 * bar[i][1] + 6416 * bar[i][2]  + 32768) >> 16) + 16);
+			yuv[i][1] = (((-9714 * bar[i][0] - 19070 * bar[i][1] + 28784 * bar[i][2] + 32768) >> 16) + 128);
+			yuv[i][2] = (((28784 * bar[i][0] - 24103 * bar[i][1] - 4681 * bar[i][2]  + 32768) >> 16) + 128);
 		}
+
+		for (i = 0; i < 16; i++) {
+			start = i * MAX_WIDTH / 8;
+			end = (i + 1) * MAX_WIDTH / 8;
+			flag = 1;
+			p = &colorbar[start * 2];
+
+			for (j = start; j < end; j++) {
+				*p = yuv[i % 8][0];
+				*(p+1) = flag ? yuv[i % 8][1] : yuv[i % 8][2];
+				flag = flag ? 0 : 1;
+				p += 2;
+			}
+		}
+
+		for (i = 0; i < FCOUNT_DEFAULT; i++) {
+			p = colorbar + ((i * MAX_WIDTH / FCOUNT_DEFAULT) % MAX_WIDTH) * 2;
+			memcpy(buf, p, bytesperline);
+			for (j = 0; j < MAX_HEIGHT; j++)
+				write(fd1, buf, bytesperline);
+		}
+	} else {
+		printf("Enter framecount: ");
+		scanf("%d", &data.framecount);
+
+		if ((!data.framecount) || (data.framecount > FCOUNT_DEFAULT))
+			data.framecount = FCOUNT_DEFAULT;
+
+		printf("\nframe rate = %d\tframe count = %d\n", data.framerate, data.framecount);
+		ioctl(fd1, 0, &data);
+
+		fd2 = open("sample/video_3840x2160.yuv", O_RDONLY);
+		if (fd2 < 0) {
+			printf("Sample file open error..\n");
+			close(fd1);
+			free(buf);
+			return;
+		}
+
+		for (i = 0; i < data.framecount; i++) {
+			for (j = 0; j < MAX_HEIGHT; j++) {
+				read(fd2, buf, bytesperline);
+				write(fd1, buf, bytesperline);
+			}
+		}
+
+		close(fd2);
 	}
 
 	printf("\nTotal %d frames are inserted\n", i);
-	ioctl(fd2, 1, 0);
+	ioctl(fd1, 1, 0);
 	close(fd1);
-	close(fd2);
 	free(buf);
 }
 
 int main(int argc, char *argv[])
 {
-	struct ffe_data data;
 	int cmd, vsize, i;
 	char gst[200], device[20];
-	char gst1[] ="gst-launch-1.0 v4l2src device=";
-	char gst2[] =" ! video/x-raw,interlace-mode=interleaved,";
-	char gst3[] =" ! videoconvert ! videoscale ! autovideosink";
+	char gst1[] = "gst-launch-1.0 v4l2src device=";
+	char gst2[] = " ! video/x-raw,interlace-mode=interleaved,";
+	char gst3[] = " ! videoconvert ! videoscale ! autovideosink";
 	char size[5][25] = {
 		"width=480,height=270", "width=640,height=360", "width=1280,height=720", "width=1920,height=1080", "width=3840,height=2160"
 	};
 
 	if (argc == 1) {
-		printf("Enter video device node path");
+		printf("Enter video device node path: ");
 		scanf("%s", device);
 	} else {
 		strcpy(device, argv[1]);
 	}
 
-	while(1) {
+	while (1) {
 		printf("\t0\tExit\n\t1\tInitialize FFE\n\t2\tStream video\nSelect your option: ");
 		scanf("%d", &cmd);
 
@@ -80,19 +146,9 @@ int main(int argc, char *argv[])
 
 		if (cmd == 1) {
 			printf("******************************************************\n");
-			printf("Enter framerate: ");
-			scanf("%d", &data.framerate);
-			printf("Enter framecount: ");
-			scanf("%d", &data.framecount);
-
-			if ((!data.framerate) || (data.framerate > MAX_FPS))
-				data.framerate = FPS_DEFAULT;
-
-			if ((!data.framecount) || (data.framecount > FCOUNT_DEFAULT))
-				data.framecount = FCOUNT_DEFAULT;
-
-			printf("\nframe rate = %d\tframe count = %d\n", data.framerate, data.framecount);
-			ff_init(data);
+			printf("\t0\tFeed frames from a file\n\t1\tGenerate colorbar\n Select an option: ");
+			scanf("%d", &cmd);
+			ff_init(cmd);
 			printf("******************************************************\n");
 		} else if (cmd == 2) {
 			printf("******************************************************\n");
@@ -101,7 +157,7 @@ int main(int argc, char *argv[])
 
 			if ((vsize < 0) || (vsize > 4)) {
 				printf("Selected option is not valid..\n");
-				continue;
+				break;
 			}
 
 			for (i = 0; i < 200; i++)
@@ -122,7 +178,6 @@ int main(int argc, char *argv[])
 		} else {
 			printf("******************************************************\n");
 			printf("Enter a valid command:\n");
-			continue;
 		}
 	}
 
