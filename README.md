@@ -8,26 +8,26 @@ Tested Platform : Ubuntu 18.04.5 LTS (5.4.0-73-generic)
 
 Dependencies : v4l2-utils
 
-1. Extract raw video files in sample directory using make command
+1. Extract raw video files in sample directory
 
-		$ make sample
+		$ cat sample/video_3840x2160.tar.xz.parta* > sample/video_3840x2160.tar.xz && tar -xf sample/video_3840x2160.tar.xz -C sample
 
 2. Build the project using make command
 
 		$ make
 
-3. Insert kernel modules
+3. Compile ff_app
+
+		$ gcc user/ff_app.c -o FFApp
+
+4. Insert kernel modules
 
 		$ sudo insmod FFE/frame_feed_emulator.ko
 		$ sudo insmod V4L2D/driver_v4l2.ko
 
-4. dmesg will give the video node name
+5. dmesg will give the video node name
 
 		$ dmesg
-
-5. For listing supported video formats
-
-		$ v4l2-ctl -d<node_number> --list-formats-ext
 
 6. Run FFApp with video device path as a command line argument
 
