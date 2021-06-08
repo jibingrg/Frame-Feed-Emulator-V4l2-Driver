@@ -52,8 +52,7 @@ int ffe_thread_function(void *data)
 		I_FLAG = false;
 		V_BUF = p;
 		I_FLAG = true;
-		jf = jiffies - jf;
-		timeout = msecs_to_jiffies((1000 / FRAME_RATE) - jf);
+		timeout = msecs_to_jiffies(1000 / FRAME_RATE) - (jiffies - jf);
 		schedule_timeout_interruptible(timeout);
 		jf = jiffies;
 		p = p->next;
@@ -143,7 +142,7 @@ static int __init ffe_init(void)
 	pr_info("%s: Inserting FFE\n", __func__);
 
 	if (alloc_chrdev_region(&device, 0, 1, name) < 0) {
-		pr_info("device registration failed..\n");
+		pr_err("device registration failed..\n");
 		return -1;
 	}
 	pr_info("Device: %s, Major number: %d\n", name, MAJOR(device));
