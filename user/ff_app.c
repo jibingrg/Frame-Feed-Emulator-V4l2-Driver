@@ -9,7 +9,7 @@
 
 #define MAX_WIDTH		3840
 #define MAX_HEIGHT		2160
-#define MAX_FPS			200
+#define MAX_FPS			120
 #define FPS_DEFAULT		25
 #define FCOUNT_DEFAULT		120
 
@@ -31,23 +31,26 @@ struct ffe_data {
 	int framecount;
 } data;
 
-void ff_init(int cmd)
+void ff_init(void)
 {
-	int fd1, fd2, i, j;
+	int fd1, fd2, i, j, cmd;
 	unsigned int bytesperline = 2 * MAX_WIDTH;
 	unsigned char *buf = malloc(bytesperline);
-
-	printf("Enter framerate: ");
-	scanf("%d", &data.framerate);
-
-	if ((!data.framerate) || (data.framerate > MAX_FPS))
-		data.framerate = FPS_DEFAULT;
 
 	fd1 = open("/dev/FFE", O_RDWR);
 	if (fd1 < 0) {
 		printf("FFE open error..\n");
 		return;
 	}
+
+	printf("\t0\tFeed frames from a file\n\t1\tGenerate colorbar\n Select an option: ");
+	scanf("%d", &cmd);
+
+	printf("Enter framerate: ");
+	scanf("%d", &data.framerate);
+
+	if ((!data.framerate) || (data.framerate > MAX_FPS))
+		data.framerate = FPS_DEFAULT;
 
 	if (cmd) {
 		int flag;
@@ -146,9 +149,7 @@ int main(int argc, char *argv[])
 
 		if (cmd == 1) {
 			printf("******************************************************\n");
-			printf("\t0\tFeed frames from a file\n\t1\tGenerate colorbar\n Select an option: ");
-			scanf("%d", &cmd);
-			ff_init(cmd);
+			ff_init();
 			printf("******************************************************\n");
 		} else if (cmd == 2) {
 			printf("******************************************************\n");
