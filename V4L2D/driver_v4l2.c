@@ -49,11 +49,6 @@ struct dev_data {
 	struct platform_device		*pdev;
 	struct v4l2_device		v4l2_dev;
 	struct video_device		vdev;
-	struct v4l2_ctrl_handler	ctrl_handler;
-	struct v4l2_ctrl		*brightness;
-	struct v4l2_ctrl		*contrast;
-	struct v4l2_ctrl		*saturation;
-	struct v4l2_ctrl		*hue;
 	struct mutex			mutex;
 	struct vb2_queue		queue;
 	struct ffe_dmaq			vidq;
@@ -74,8 +69,6 @@ static void stream_frame(unsigned int width, void *vbuf)
 		pr_err("%s: buffer error..\n", __func__);
 		return;
 	}
-
-	pr_info("%s: frame number = %d\n", __func__, V_BUF->frame_no);
 
 	for (i = 0; i < MAX_HEIGHT; i += fract) {
 		for (j = 0; j < (MAX_WIDTH << 1); j += (fract << 2)) {
@@ -112,6 +105,7 @@ static int thread_function(void *data)
 			vbuf = vb2_plane_vaddr(&buf->vb, 0);
 			list_del(&buf->list);
 			spin_unlock_irqrestore(&dev->s_lock, flags);
+			v4l2_info(&dev->v4l2_dev, "frame number = %d\n", V_BUF->frame_no);
 			stream_frame(dev->width, vbuf);
 			buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
 			buf->v4l2_buf.sequence = dev->f_count++;
@@ -135,6 +129,11 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned in
 		return -EINVAL;
 	}
 
+	if (!V_BUF) {
+		v4l2_err(&dev->v4l2_dev, "%s: FFE is not initialized..\n", __func__);
+		return -ENODATA;
+	}
+
 	*nplanes = 1;
 	sizes[0] = size;
 	v4l2_info(&dev->v4l2_dev, "%s: width = %d, height = %d, size = %ld\n", __func__, dev->width, dev->height, size);
@@ -150,11 +149,6 @@ static int buffer_prepare(struct vb2_buffer *vb)
 	if (vb2_plane_size(vb, 0) < size) {
 		v4l2_err(&dev->v4l2_dev, "%s: vb2 plane size is less than required..\n", __func__);
 		return -EINVAL;
-	}
-
-	if (!V_BUF) {
-		v4l2_err(&dev->v4l2_dev, "%s: FFE is not initialized..\n", __func__);
-		return -ENODATA;
 	}
 
 	vb2_set_plane_payload(&buf->vb, 0, size);
@@ -249,7 +243,7 @@ static int vidioc_enum_fmt_vid_cap(struct file *file, void *priv, struct v4l2_fm
 	if (f->index)
 		return -EINVAL;
 
-	strscpy(f->description, "YUV 4:2:2", sizeof(f->description));
+	strscpy(f->description, "YUYV 4:2:2", sizeof(f->description));
 	f->pixelformat = V4L2_PIX_FMT_YUYV;
 
 	return 0;
@@ -337,6 +331,19 @@ static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsi
 	return 0;
 }
 
+static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2_frmivalenum *fival)
+{
+	if (fival->index)
+		return -EINVAL;
+
+	if (fival->pixel_format != V4L2_PIX_FMT_YUYV)
+		return -EINVAL;
+
+	fival->type = V4L2_FRMIVAL_TYPE_DISCRETE;
+	fival->discrete = (struct v4l2_fract) {1, FRAME_RATE};
+	return 0;
+}
+
 static int vidioc_enum_input(struct file *file, void *priv, struct v4l2_input *inp)
 {
 	if (inp->index)
@@ -363,19 +370,6 @@ static int vidioc_s_input(struct file *file, void *priv, unsigned int i)
 		return -EINVAL;
 
 	dev->input = 0;
-	return 0;
-}
-
-static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2_frmivalenum *fival)
-{
-	if (fival->index)
-		return -EINVAL;
-
-	if (fival->pixel_format != V4L2_PIX_FMT_YUYV)
-		return -EINVAL;
-
-	fival->type = V4L2_FRMIVAL_TYPE_DISCRETE;
-	fival->discrete = (struct v4l2_fract) {1, FRAME_RATE};
 	return 0;
 }
 
@@ -409,33 +403,6 @@ static int vidioc_s_parm(struct file *file, void *priv, struct v4l2_streamparm *
 	return 0;
 }
 
-static int s_ctrl(struct v4l2_ctrl *ctrl)
-{
-	struct dev_data *dev = container_of(ctrl->handler, struct dev_data, ctrl_handler);
-
-	switch (ctrl->id) {
-	case V4L2_CID_BRIGHTNESS:
-		dev->brightness = ctrl;
-		break;
-	case V4L2_CID_CONTRAST:
-		dev->contrast = ctrl;
-		break;
-	case V4L2_CID_SATURATION:
-		dev->saturation = ctrl;
-		break;
-	case V4L2_CID_HUE:
-		dev->hue = ctrl;
-		break;
-	default:
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static const struct v4l2_ctrl_ops ffe_ctrl_ops = {
-	.s_ctrl				= s_ctrl,
-};
-
 static const struct v4l2_ioctl_ops ffe_ioctl_ops = {
 	.vidioc_querycap		= vidioc_querycap,
 	.vidioc_enum_fmt_vid_cap	= vidioc_enum_fmt_vid_cap,
@@ -443,20 +410,20 @@ static const struct v4l2_ioctl_ops ffe_ioctl_ops = {
 	.vidioc_try_fmt_vid_cap		= vidioc_try_fmt_vid_cap,
 	.vidioc_s_fmt_vid_cap		= vidioc_s_fmt_vid_cap,
 	.vidioc_enum_framesizes		= vidioc_enum_framesizes,
+	.vidioc_enum_frameintervals	= vidioc_enum_frameintervals,
+	.vidioc_g_input			= vidioc_g_input,
+	.vidioc_s_input			= vidioc_s_input,
+	.vidioc_g_parm			= vidioc_g_parm,
+	.vidioc_s_parm			= vidioc_s_parm,
 	.vidioc_reqbufs			= vb2_ioctl_reqbufs,
 	.vidioc_create_bufs		= vb2_ioctl_create_bufs,
 	.vidioc_prepare_buf		= vb2_ioctl_prepare_buf,
 	.vidioc_querybuf		= vb2_ioctl_querybuf,
 	.vidioc_qbuf			= vb2_ioctl_qbuf,
 	.vidioc_dqbuf			= vb2_ioctl_dqbuf,
-	.vidioc_enum_input		= vidioc_enum_input,
-	.vidioc_g_input			= vidioc_g_input,
-	.vidioc_s_input			= vidioc_s_input,
-	.vidioc_enum_frameintervals	= vidioc_enum_frameintervals,
-	.vidioc_g_parm			= vidioc_g_parm,
-	.vidioc_s_parm			= vidioc_s_parm,
 	.vidioc_streamon		= vb2_ioctl_streamon,
 	.vidioc_streamoff		= vb2_ioctl_streamoff,
+	.vidioc_enum_input		= vidioc_enum_input,
 	.vidioc_log_status		= v4l2_ctrl_log_status,
 	.vidioc_subscribe_event		= v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event	= v4l2_event_unsubscribe,
@@ -477,7 +444,6 @@ static int p_probe(struct platform_device *pdev)
 	struct dev_data *dev;
 	struct video_device *vdev;
 	struct vb2_queue *q;
-	struct v4l2_ctrl_handler *hdl;
 	int ret;
 
 	dev_info(&pdev->dev, "%s: probe function\n", __func__);
@@ -500,22 +466,6 @@ static int p_probe(struct platform_device *pdev)
 	dev->pixelsize = 2;
 	dev->input = 0;
 
-	hdl = &dev->ctrl_handler;
-	v4l2_ctrl_handler_init(hdl, 4);
-	dev->brightness = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_BRIGHTNESS, 0, 255, 1, 127);
-	dev->contrast = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_CONTRAST, 0, 255, 1, 16);
-	dev->saturation = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_SATURATION, 0, 255, 1, 127);
-	dev->hue = v4l2_ctrl_new_std(hdl, &ffe_ctrl_ops, V4L2_CID_HUE, -128, 127, 1, 0);
-
-	if (hdl->error) {
-		dev_err(&pdev->dev, "%s: v4l2 control handler error..\n", __func__);
-		ret = hdl->error;
-		v4l2_ctrl_handler_free(hdl);
-		v4l2_device_unregister(&dev->v4l2_dev);
-		return ret;
-	}
-	dev->v4l2_dev.ctrl_handler = hdl;
-
 	spin_lock_init(&dev->s_lock);
 	q = &dev->queue;
 	q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -529,7 +479,6 @@ static int p_probe(struct platform_device *pdev)
 	ret = vb2_queue_init(q);
 	if (ret) {
 		dev_err(&pdev->dev, "%s: vb2 queue init failed..\n", __func__);
-		v4l2_ctrl_handler_free(hdl);
 		v4l2_device_unregister(&dev->v4l2_dev);
 		return ret;
 	}
@@ -552,7 +501,6 @@ static int p_probe(struct platform_device *pdev)
 	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "%s: video device registration failed..\n", __func__);
-		v4l2_ctrl_handler_free(hdl);
 		v4l2_device_unregister(&dev->v4l2_dev);
 		video_device_release(&dev->vdev);
 		return ret;
@@ -571,7 +519,6 @@ static int p_remove(struct platform_device *pdev)
 	v4l2_info(&dev->v4l2_dev, "%s: unregistering %s\n", __func__, video_device_node_name(&dev->vdev));
 	video_unregister_device(&dev->vdev);
 	v4l2_device_unregister(&dev->v4l2_dev);
-	v4l2_ctrl_handler_free(&dev->ctrl_handler);
 	return 0;
 }
 
