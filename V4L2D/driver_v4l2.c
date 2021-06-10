@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/types.h>
 #include <linux/platform_device.h>
 #include <linux/freezer.h>
 #include <media/v4l2-ioctl.h>
@@ -51,7 +52,7 @@ struct dev_data {
 	struct video_device		vdev;
 	struct mutex			mutex;
 	struct vb2_queue		queue;
-	struct ffe_dmaq			vidq;
+	struct ffe_dmaq		vidq;
 	u32				pixelformat;
 	struct v4l2_fract		timeperframe;
 	spinlock_t			s_lock;
@@ -202,28 +203,14 @@ static void stop_streaming(struct vb2_queue *vq)
 	}
 }
 
-static void ffe_lock(struct vb2_queue *vq)
-{
-	struct dev_data *dev = vb2_get_drv_priv(vq);
-
-	mutex_lock(&dev->mutex);
-}
-
-static void ffe_unlock(struct vb2_queue *vq)
-{
-	struct dev_data *dev = vb2_get_drv_priv(vq);
-
-	mutex_unlock(&dev->mutex);
-}
-
 static const struct vb2_ops ffe_qops = {
 	.queue_setup			= queue_setup,
 	.buf_prepare			= buffer_prepare,
 	.buf_queue			= buffer_queue,
 	.start_streaming		= start_streaming,
-	.stop_streaming			= stop_streaming,
-	.wait_prepare			= ffe_unlock,
-	.wait_finish			= ffe_lock,
+	.stop_streaming		= stop_streaming,
+	.wait_prepare			= vb2_ops_wait_prepare,
+	.wait_finish			= vb2_ops_wait_finish,
 };
 
 static int vidioc_querycap(struct file *file, void  *priv, struct v4l2_capability *cap)
@@ -498,7 +485,7 @@ static int p_probe(struct platform_device *pdev)
 	vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING | V4L2_CAP_READWRITE;
 	video_set_drvdata(vdev, dev);
 
-	ret = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "%s: video device registration failed..\n", __func__);
 		v4l2_device_unregister(&dev->v4l2_dev);
