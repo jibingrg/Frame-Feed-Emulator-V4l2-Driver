@@ -28,10 +28,14 @@ Dependencies : v4l2-utils
 
 		dmesg
 
-6. Run FFApp with video device path as a command line argument
+6. Run FFApp to initialize Frame Feed Emulator. Command line arguments I (to insert frames from sample file) or G (to generate frames), frame rate, frame count, and pixel height.
+
+		sudo ./FFApp <I/G> <frame_rate> <frame_count> <height>
+
+7. Run FFApp to stream video. Command line argument video node path
 
 		sudo ./FFApp /dev/video<node_number>
 
-7. Remove modules
+8. Remove modules
 		
 		sudo rmmod driver_v4l2 && sudo rmmod frame_feed_emulator
