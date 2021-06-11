@@ -14,9 +14,6 @@
 
 #include "driver_v4l2.h"
 
-#define MAX_WIDTH			3840
-#define MAX_HEIGHT			2160
-
 MODULE_DESCRIPTION("V4L2 Driver with FFE");
 MODULE_LICENSE("GPL");
 
@@ -52,7 +49,7 @@ struct dev_data {
 	struct video_device		vdev;
 	struct mutex			mutex;
 	struct vb2_queue		queue;
-	struct ffe_dmaq		vidq;
+	struct ffe_dmaq			vidq;
 	u32				pixelformat;
 	struct v4l2_fract		timeperframe;
 	spinlock_t			s_lock;
@@ -61,30 +58,13 @@ struct dev_data {
 	unsigned int			width, height, pixelsize;
 };
 
-static void stream_frame(unsigned int width, void *vbuf)
-{
-	int i, j;
-	int fract = MAX_WIDTH / width;
-
-	if (!vbuf) {
-		pr_err("%s: buffer error..\n", __func__);
-		return;
-	}
-
-	for (i = 0; i < MAX_HEIGHT; i += fract) {
-		for (j = 0; j < (MAX_WIDTH << 1); j += (fract << 2)) {
-			memcpy(vbuf, V_BUF->data + (i * (MAX_WIDTH << 1) + j), 4);
-			vbuf += 4;
-		}
-	}
-}
-
 static int thread_function(void *data)
 {
 	struct dev_data *dev = data;
 	struct ffe_dmaq *q = &dev->vidq;
 	struct ffe_buffer *buf;
 	unsigned long flags = 0;
+	unsigned long size = F_DATA.width * F_DATA.height << 1;
 	void *vbuf;
 
 	v4l2_info(&dev->v4l2_dev, "%s: k_thread\n", __func__);
@@ -106,8 +86,8 @@ static int thread_function(void *data)
 			vbuf = vb2_plane_vaddr(&buf->vb, 0);
 			list_del(&buf->list);
 			spin_unlock_irqrestore(&dev->s_lock, flags);
-			v4l2_info(&dev->v4l2_dev, "frame number = %d\n", V_BUF->frame_no);
-			stream_frame(dev->width, vbuf);
+			v4l2_info(&dev->v4l2_dev, "frame rate = %d, frame number = %d\n", F_DATA.framerate, V_BUF->frame_no);
+			memcpy(vbuf, V_BUF->data, size);
 			buf->v4l2_buf.field = V4L2_FIELD_INTERLACED;
 			buf->v4l2_buf.sequence = dev->f_count++;
 			vb2_buffer_done(&buf->vb, VB2_BUF_STATE_DONE);
@@ -123,12 +103,7 @@ static int thread_function(void *data)
 static int queue_setup(struct vb2_queue *vq, unsigned int *nbuffers, unsigned int *nplanes, unsigned int sizes[], struct device *alloc_ctxs[])
 {
 	struct dev_data *dev = vb2_get_drv_priv(vq);
-	unsigned long size = dev->width * dev->height * dev->pixelsize;
-
-	if (dev->width > MAX_WIDTH || dev->height > MAX_HEIGHT) {
-		v4l2_err(&dev->v4l2_dev, "%s: width or height is larger than expected..\n", __func__);
-		return -EINVAL;
-	}
+	unsigned long size = F_DATA.width * F_DATA.height << 1;
 
 	if (!V_BUF) {
 		v4l2_err(&dev->v4l2_dev, "%s: FFE is not initialized..\n", __func__);
@@ -240,8 +215,8 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 {
 	struct dev_data *dev = video_drvdata(file);
 
-	f->fmt.pix.width = dev->width;
-	f->fmt.pix.height = dev->height;
+	f->fmt.pix.width = dev->width = F_DATA.width;
+	f->fmt.pix.height = dev->height = F_DATA.height;
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 	f->fmt.pix.pixelformat = dev->pixelformat;
 	f->fmt.pix.bytesperline = f->fmt.pix.width * dev->pixelsize;
@@ -262,27 +237,11 @@ static int vidioc_try_fmt_vid_cap(struct file *file, void *priv, struct v4l2_for
 	dev->pixelsize = 2;
 	f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
 
-	if (f->fmt.pix.width <= 480) {
-		f->fmt.pix.width = dev->width = 480;
-		f->fmt.pix.height = dev->height = 270;
-	} else if (f->fmt.pix.width <= 640) {
-		f->fmt.pix.width = dev->width = 640;
-		f->fmt.pix.height = dev->height = 360;
-	} else if (f->fmt.pix.width <= 1280) {
-		f->fmt.pix.width = dev->width = 1280;
-		f->fmt.pix.height = dev->height = 720;
-	} else if (f->fmt.pix.width <= 1920) {
-		f->fmt.pix.width = dev->width = 1920;
-		f->fmt.pix.height = dev->height = 1080;
-	} else if (f->fmt.pix.width <= 3840) {
-		f->fmt.pix.width = dev->width = 3840;
-		f->fmt.pix.height = dev->height = 2160;
-	} else {
-		dev->width = f->fmt.pix.width;
-		dev->height = f->fmt.pix.height;
-		return -EINVAL;
-	}
+	if ((f->fmt.pix.width != F_DATA.width) || (f->fmt.pix.height != F_DATA.height))
+		v4l2_info(&dev->v4l2_dev, "%s pixel width and height changed to default\n", __func__);
 
+	f->fmt.pix.width = dev->width = F_DATA.width;
+	f->fmt.pix.height = dev->height = F_DATA.height;
 	f->fmt.pix.field = V4L2_FIELD_INTERLACED;
 	f->fmt.pix.bytesperline = dev->width * dev->pixelsize;
 	f->fmt.pix.sizeimage = dev->height * f->fmt.pix.bytesperline;
@@ -306,15 +265,13 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_forma
 
 static int vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize)
 {
-	static const struct v4l2_frmsize_discrete sizes[] = {
-		{480, 270}, {640, 360}, {1280, 720}, {1920, 1080}, {3840, 2160}
-	};
+	struct v4l2_frmsize_discrete size = { F_DATA.width, F_DATA.height};
 
-	if (fsize->index >= 5)
+	if (fsize->index)
 		return -EINVAL;
 
 	fsize->type = V4L2_FRMSIZE_TYPE_DISCRETE;
-	fsize->discrete = sizes[fsize->index];
+	fsize->discrete = size;
 	return 0;
 }
 
@@ -327,7 +284,7 @@ static int vidioc_enum_frameintervals(struct file *file, void *priv, struct v4l2
 		return -EINVAL;
 
 	fival->type = V4L2_FRMIVAL_TYPE_DISCRETE;
-	fival->discrete = (struct v4l2_fract) {1, FRAME_RATE};
+	fival->discrete = (struct v4l2_fract) {1, F_DATA.framerate};
 	return 0;
 }
 
@@ -368,7 +325,7 @@ static int vidioc_g_parm(struct file *file, void *priv, struct v4l2_streamparm *
 	if (parm->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 
-	tpf = (struct v4l2_fract) {1, FRAME_RATE};
+	tpf = (struct v4l2_fract) {1, F_DATA.framerate};
 	parm->parm.capture.capability   = V4L2_CAP_TIMEPERFRAME;
 	parm->parm.capture.timeperframe = dev->timeperframe = tpf;
 	parm->parm.capture.readbuffers  = 1;
@@ -383,7 +340,7 @@ static int vidioc_s_parm(struct file *file, void *priv, struct v4l2_streamparm *
 	if (parm->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 
-	tpf = (struct v4l2_fract) {1, FRAME_RATE};
+	tpf = (struct v4l2_fract) {1, F_DATA.framerate};
 
 	dev->timeperframe = parm->parm.capture.timeperframe = tpf;
 	parm->parm.capture.readbuffers = 1;
@@ -447,9 +404,9 @@ static int p_probe(struct platform_device *pdev)
 	}
 
 	dev->pixelformat = V4L2_PIX_FMT_YUYV;
-	dev->timeperframe = (struct v4l2_fract) {1, FRAME_RATE};
-	dev->width = 3840;
-	dev->height = 2160;
+	dev->timeperframe = (struct v4l2_fract) {1, F_DATA.framerate};
+	dev->width = F_DATA.width;
+	dev->height = F_DATA.height;
 	dev->pixelsize = 2;
 	dev->input = 0;
 
