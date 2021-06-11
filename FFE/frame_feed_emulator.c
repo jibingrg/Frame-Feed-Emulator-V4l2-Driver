@@ -9,10 +9,6 @@
 #include <linux/vmalloc.h>
 #include <linux/kthread.h>
 
-#define MAX_WIDTH			3840
-#define MAX_HEIGHT			2160
-#define FPS_DEFAULT			25
-
 MODULE_LICENSE("GPL");
 
 struct ffe_frame {
@@ -24,13 +20,15 @@ struct ffe_frame {
 struct ffe_data {
 	int framerate;
 	int framecount;
-} frame_data;
+	int width;
+	int height;
+};
 
 struct ffe_frame *V_BUF;
 EXPORT_SYMBOL(V_BUF);
 
-int FRAME_RATE = FPS_DEFAULT;
-EXPORT_SYMBOL(FRAME_RATE);
+struct ffe_data F_DATA;
+EXPORT_SYMBOL(F_DATA);
 
 bool I_FLAG;
 EXPORT_SYMBOL(I_FLAG);
@@ -52,7 +50,7 @@ int ffe_thread_function(void *data)
 		I_FLAG = false;
 		V_BUF = p;
 		I_FLAG = true;
-		timeout = msecs_to_jiffies(1000 / FRAME_RATE) - (jiffies - jf);
+		timeout = msecs_to_jiffies(1000 / F_DATA.framerate) - (jiffies - jf);
 		schedule_timeout_interruptible(timeout);
 		jf = jiffies;
 		p = p->next;
@@ -76,7 +74,7 @@ long ffe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	int i;
 	struct ffe_frame *q;
-	unsigned long size = 2 * MAX_WIDTH * MAX_HEIGHT;
+	unsigned long size;
 
 	if (cmd == 1) {
 		p = head;
@@ -87,9 +85,10 @@ long ffe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	if (ffe_thread)
 		kthread_stop(ffe_thread);
 
-	copy_from_user(&frame_data, (struct ffe_data *) arg, sizeof(struct ffe_data));
-	FRAME_RATE = frame_data.framerate;
-	pr_info("%s: frame rate = %d, frame count = %d\n", __func__, frame_data.framerate, frame_data.framecount);
+	copy_from_user(&F_DATA, (struct ffe_data *) arg, sizeof(struct ffe_data));
+	pr_info("%s: frame rate = %d, frame count = %d\n", __func__, F_DATA.framerate, F_DATA.framecount);
+	pr_info("%s: frame width = %d, frame height = %d\n", __func__, F_DATA.width, F_DATA.height);
+	size = F_DATA.width * F_DATA.height << 1;
 
 	if (head) {
 		p = head->next;
@@ -106,7 +105,7 @@ long ffe_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	p = head = vmalloc(sizeof(struct ffe_frame));
 	p->frame_no = 0;
 	p->data = vmalloc(size);
-	for (i = 1; i < frame_data.framecount; i++) {
+	for (i = 1; i < F_DATA.framecount; i++) {
 		p->frame_no = i;
 		p = p->next = vmalloc(sizeof(struct ffe_frame));
 		p->data = vmalloc(size);
@@ -120,9 +119,9 @@ ssize_t ffe_write(struct file *filp, const char __user *buf, size_t count, loff_
 {
 	static int i;
 
-	copy_from_user(p->data + (i * (MAX_WIDTH << 1)), buf, count);
+	copy_from_user(p->data + (i * (F_DATA.width << 1)), buf, count);
 	i++;
-	if (i == MAX_HEIGHT) {
+	if (i == F_DATA.height) {
 		i = 0;
 		p = p->next;
 	}
