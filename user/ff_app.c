@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL
 
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -11,8 +11,9 @@
 #define MAX_HEIGHT		2160
 #define MAX_FPS			125
 #define FPS_DEFAULT		25
-#define FCOUNT_MIN		40
+#define FCOUNT_MIN		80
 #define FCOUNT_DEFAULT		120
+#define FCOUNT_MAX		240
 
 #define COLOR_WHITE		{ 0xFF, 0xFF, 0xFF}
 #define COLOR_YELLOW		{ 0xFF, 0xFF, 0x00}
@@ -74,7 +75,7 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 
-	if (argc != 5) {
+	if (argc < 5) {
 		printf("Expecting command line arguments..\n");
 		printf("sudo ./FFApp <I/G> <frame_rate> <frame_count> <pixel_height>\n");
 		return -1;
@@ -88,10 +89,17 @@ int main(int argc, char *argv[])
 
 	data.framerate = str_to_int(argv[2]);
 	if ((!data.framerate) || (data.framerate > MAX_FPS))
-		data.framerate = FPS_DEFAULT;
+		data.framerate = MAX_FPS;
 
 	data.framecount = str_to_int(argv[3]);
-	if (data.framecount < FCOUNT_MIN)
+	if (argv[1][0] == 'G') {
+		if (data.framecount <= FCOUNT_MIN)
+			data.framecount = FCOUNT_MIN;
+		else if (data.framecount <= FCOUNT_DEFAULT)
+			data.framecount = FCOUNT_DEFAULT;
+		else
+			data.framecount = FCOUNT_MAX;
+	} else if ((!data.framerate) || (data.framecount > FCOUNT_DEFAULT))
 		data.framecount = FCOUNT_DEFAULT;
 
 	data.height = str_to_int(argv[4]);
